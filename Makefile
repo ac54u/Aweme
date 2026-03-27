@@ -42,6 +42,15 @@ ADDITIONAL_OBJCCXXFLAGS += -stdlib=libc++
 include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = DYYY
 
+# 强制开启 Objective-C++ 编译模式，解决 cmath 找不到的问题
+DYYY_CFLAGS = -fobjc-arc -x objective-c++
+# 链接标准 C++ 库
+DYYY_LDFLAGS = -lc++
+
+# 确保声明了所需的系统框架
+DYYY_FRAMEWORKS = UIKit Photos AVFoundation CoreGraphics
+
+
 DYYY_FILES = DYYY.xm DYYYFloatClearButton.xm DYYYFloatSpeedButton.m DYYYSettings.xm DYYYABTestHook.xm DYYYLongPressPanel.xm DYYYSettingsHelper.m DYYYImagePickerDelegate.m DYYYBackupPickerDelegate.m DYYYSettingViewController.m DYYYBottomAlertView.m DYYYCustomInputView.m DYYYOptionsSelectionView.m DYYYIconOptionsDialogView.m DYYYAboutDialogView.m DYYYKeywordListView.m DYYYFilterSettingsView.m DYYYConfirmCloseView.m DYYYToast.m DYYYManager.m DYYYUtils.m CityManager.m AWMSafeDispatchTimer.m DYYYAudioManager.m DYYYVoiceViewController.m
 DYYY_CFLAGS = -fobjc-arc -w
 DYYY_LDFLAGS = -weak_framework AVFAudio
