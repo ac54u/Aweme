@@ -350,8 +350,8 @@
     [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"DYYY_IsArmed"];
     [[NSUserDefaults standardUserDefaults] synchronize];
     
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"装填成功！" 
-                                                                   message:@"请返回【评论区】或【私信框】\n长按麦克风录音 1 秒即可自动发送音频！" 
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"音频装填成功！" 
+                                                                   message:@"请返回【评论区】或【私信框】\n长按麦克风录音 1 秒即可自动发送该音频！" 
                                                             preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"好的" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
         [self dismissViewControllerAnimated:YES completion:nil];
