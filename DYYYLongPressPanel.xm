@@ -1539,7 +1539,8 @@
 
 // =======================================
 // ==========================================
-// 🚀 终极核武：全屏穿透悬浮窗 + VAD声控掐头去尾 + 极速直通防越界 (完美最终版)
+// ==========================================
+// 🚀 终极核武：全屏穿透悬浮窗 + VAD声控掐头去尾 (彻底修复剪辑失败版)
 // ==========================================
 #import <UIKit/UIKit.h>
 #import <ReplayKit/ReplayKit.h>
@@ -1553,6 +1554,7 @@ static BOOL g_isRecordingPCM = NO;
 static BOOL g_firstSoundDetected = NO;
 static CMTime g_firstSoundTime;
 static CMTime g_lastSoundTime;
+static CMTime g_latestAppendedTime; // ⚠️ 新增：记录真实写入文件的最后一帧时间
 static NSString *g_tempAudioPath = nil;
 
 // 🧠 核心算法：从数据流中提取音频振幅 (计算音量大小)
@@ -1589,7 +1591,7 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
 }
 
 // ==========================================
-// 🔴 全屏透明悬浮窗管理器
+// 🔴 全屏透明悬浮窗管理器 (这部分保持原样)
 // ==========================================
 @interface DYYYRecordWindow : UIWindow
 @property (nonatomic, strong) UIView *floatButton;
@@ -1657,7 +1659,6 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
     return self;
 }
 
-// 事件穿透魔法：只拦截小圆点区域
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     CGRect hitArea = CGRectInset(_floatButton.frame, -20, -20);
     if (CGRectContainsPoint(hitArea, point)) return _floatButton; 
@@ -1666,7 +1667,6 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
 
 - (void)show { self.hidden = NO; }
 
-// 拖拽与智能边缘吸附
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     CGPoint translation = [pan translationInView:self];
     _floatButton.center = CGPointMake(_floatButton.center.x + translation.x, _floatButton.center.y + translation.y);
@@ -1688,7 +1688,6 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
     }
 }
 
-// UI 状态反馈
 - (void)switchToWaitingColor {
     CABasicAnimation *pulse = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
     pulse.duration = 0.6;
@@ -1711,7 +1710,7 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
 }
 
 // ==========================================
-// 🎧 核心掐头去尾录音逻辑
+// 🎧 核心掐头去尾录音逻辑 (重构修复版)
 // ==========================================
 - (void)handleTap {
     if (!g_isRecordingPCM) {
@@ -1751,23 +1750,26 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
             if (bufferType == RPSampleBufferTypeAudioApp) {
                 
                 float amplitude = DYYY_GetBufferAmplitude(sampleBuffer);
+                CMTime currentTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
                 
                 // 🔊 掐头：音量大于 0.005 才判定为开始发声
                 if (amplitude > 0.005) {
                     if (!g_firstSoundDetected) {
                         g_firstSoundDetected = YES;
-                        g_firstSoundTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+                        g_firstSoundTime = currentTime;
                         [g_assetWriter startSessionAtSourceTime:g_firstSoundTime];
                         
                         dispatch_async(dispatch_get_main_queue(), ^{
                             [[DYYYRecordWindow sharedWindow] switchToActiveRecordingColor];
                         });
                     }
-                    g_lastSoundTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+                    g_lastSoundTime = currentTime;
                 }
                 
                 if (g_firstSoundDetected && g_audioInput.isReadyForMoreMediaData) {
                     [g_audioInput appendSampleBuffer:sampleBuffer];
+                    // ⚠️ 核心修复1：每次追加数据，都实时记录绝对时间，彻底抛弃不靠谱的 asset.duration
+                    g_latestAppendedTime = currentTime;
                 }
             }
         } completionHandler:nil];
@@ -1789,14 +1791,14 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
                     // 加上 0.3 秒的防切断尾音保护
                     calculatedDuration = CMTimeAdd(calculatedDuration, CMTimeMake(300, 1000));
                     
-                    // 🛡️ 边界保护：绝对不能超过文件的真实物理长度，防止越界报错！
-                    CMTime actualDuration = asset.duration;
-                    if (CMTimeCompare(calculatedDuration, actualDuration) > 0) {
-                        calculatedDuration = actualDuration;
+                    // 🛡️ 边界保护：用我们刚才亲手打点的最后写入时间计算真实长度！
+                    CMTime actualWrittenDuration = CMTimeSubtract(g_latestAppendedTime, g_firstSoundTime);
+                    if (CMTimeCompare(calculatedDuration, actualWrittenDuration) > 0) {
+                        calculatedDuration = actualWrittenDuration;
                     }
                     
-                    // ⚡️ 极速直通：使用 Passthrough 原画直通模式，不二次转码，零失败率
-                    AVAssetExportSession *exportSession = [[AVAssetExportSession alloc] initWithAsset:asset presetName:AVAssetExportPresetPassthrough];
+                    // ⚡️ 核心修复2：切回 AppleM4A 模式！只有它支持把 AAC 从中间剪断！
+                    AVAssetExportSession *exportSession = [[AVAssetExportSession alloc] initWithAsset:asset presetName:AVAssetExportPresetAppleM4A];
                     
                     NSString *targetDir = [[DYYYAudioManager sharedManager] voiceDirectory];
                     NSString *fileName = [NSString stringWithFormat:@"精剪内录_%ld.m4a", (long)[[NSDate date] timeIntervalSince1970]];
@@ -1807,7 +1809,6 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
                     exportSession.timeRange = CMTimeRangeMake(kCMTimeZero, calculatedDuration);
                     
                     [exportSession exportAsynchronouslyWithCompletionHandler:^{
-                        // 清理临时文件
                         [[NSFileManager defaultManager] removeItemAtPath:g_tempAudioPath error:nil];
                         
                         dispatch_async(dispatch_get_main_queue(), ^{
@@ -1838,13 +1839,14 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
 @end
 
 // ==========================================
-// 🚀 插件加载时自动显示悬浮窗 (必须完全独立在外层)
+// 🚀 插件加载时自动显示悬浮窗
 // ==========================================
 %ctor {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         [[DYYYRecordWindow sharedWindow] show];
     });
 }
+
 
 
 
