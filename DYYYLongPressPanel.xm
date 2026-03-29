@@ -1539,178 +1539,7 @@
 
 // =======================================
 // ==========================================
-// ==========================================
-// 🚀 终极核武：全屏穿透悬浮窗 + VAD声控掐头去尾 (彻底修复剪辑失败版)
-// ==========================================
-#import <UIKit/UIKit.h>
-#import <ReplayKit/ReplayKit.h>
-#import <AVFoundation/AVFoundation.h>
-
-static AVAssetWriter *g_assetWriter = nil;
-static AVAssetWriterInput *g_audioInput = nil;
-static BOOL g_isRecordingPCM = NO;
-
-// 🌟 自动裁剪核心变量
-static BOOL g_firstSoundDetected = NO;
-static CMTime g_firstSoundTime;
-static CMTime g_lastSoundTime;
-static CMTime g_latestAppendedTime; // ⚠️ 新增：记录真实写入文件的最后一帧时间
-static NSString *g_tempAudioPath = nil;
-
-// 🧠 核心算法：从数据流中提取音频振幅 (计算音量大小)
-static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
-    CMBlockBufferRef blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer);
-    if (!blockBuffer) return 0.0;
-    
-    size_t lengthAtOffset, totalLength;
-    char *dataPointer;
-    OSStatus status = CMBlockBufferGetDataPointer(blockBuffer, 0, &lengthAtOffset, &totalLength, &dataPointer);
-    if (status != kCMBlockBufferNoErr) return 0.0;
-    
-    CMAudioFormatDescriptionRef format = CMSampleBufferGetFormatDescription(sampleBuffer);
-    const AudioStreamBasicDescription *asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format);
-    if (!asbd) return 0.0;
-    
-    float maxAmplitude = 0.0;
-    if (asbd->mFormatFlags & kAudioFormatFlagIsFloat) {
-        float *floatData = (float *)dataPointer;
-        size_t count = totalLength / sizeof(float);
-        for (size_t i = 0; i < count; i++) {
-            float val = fabsf(floatData[i]);
-            if (val > maxAmplitude) maxAmplitude = val;
-        }
-    } else if (asbd->mBitsPerChannel == 16) {
-        int16_t *intData = (int16_t *)dataPointer;
-        size_t count = totalLength / sizeof(int16_t);
-        for (size_t i = 0; i < count; i++) {
-            float val = abs(intData[i]) / 32768.0;
-            if (val > maxAmplitude) maxAmplitude = val;
-        }
-    }
-    return maxAmplitude;
-}
-
-// ==========================================
-// 🔴 全屏透明悬浮窗管理器 (这部分保持原样)
-// ==========================================
-@interface DYYYRecordWindow : UIWindow
-@property (nonatomic, strong) UIView *floatButton;
-@property (nonatomic, strong) UIView *gradientView;
-@property (nonatomic, strong) CAGradientLayer *gradientLayer;
-+ (instancetype)sharedWindow;
-- (void)show;
-- (void)switchToWaitingColor;
-- (void)switchToActiveRecordingColor;
-- (void)stopPulseAnimation;
-@end
-
-@implementation DYYYRecordWindow
-
-+ (instancetype)sharedWindow {
-    static DYYYRecordWindow *shared = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        shared = [[DYYYRecordWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-    });
-    return shared;
-}
-
-- (instancetype)initWithFrame:(CGRect)frame {
-    self = [super initWithFrame:frame];
-    if (self) {
-        self.windowLevel = UIWindowLevelAlert + 999;
-        self.backgroundColor = [UIColor clearColor]; 
-        
-        CGFloat screenW = frame.size.width;
-        CGFloat screenH = frame.size.height;
-        
-        _floatButton = [[UIView alloc] initWithFrame:CGRectMake(screenW - 40, screenH * 0.7, 18, 18)];
-        _floatButton.backgroundColor = [UIColor clearColor];
-        
-        _gradientView = [[UIView alloc] initWithFrame:_floatButton.bounds];
-        _gradientView.layer.cornerRadius = 9.0;
-        _gradientView.clipsToBounds = YES;
-        _gradientView.layer.borderWidth = 2.0;
-        _gradientView.layer.borderColor = [UIColor whiteColor].CGColor;
-        
-        _gradientLayer = [CAGradientLayer layer];
-        _gradientLayer.frame = _gradientView.bounds;
-        _gradientLayer.colors = @[
-            (__bridge id)[UIColor colorWithRed:0.0 green:0.89 blue:0.59 alpha:1.0].CGColor,
-            (__bridge id)[UIColor colorWithRed:0.16 green:0.47 blue:1.0 alpha:1.0].CGColor
-        ];
-        _gradientLayer.startPoint = CGPointMake(0.2, 0);
-        _gradientLayer.endPoint = CGPointMake(0.8, 1);
-        [_gradientView.layer addSublayer:_gradientLayer];
-        
-        [_floatButton addSubview:_gradientView];
-        _floatButton.layer.shadowColor = [UIColor blackColor].CGColor;
-        _floatButton.layer.shadowOffset = CGSizeMake(0, 1);
-        _floatButton.layer.shadowOpacity = 0.2;
-        _floatButton.layer.shadowRadius = 2;
-        [self addSubview:_floatButton];
-        
-        UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTap)];
-        [_floatButton addGestureRecognizer:tap];
-        
-        UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
-        [_floatButton addGestureRecognizer:pan];
-    }
-    return self;
-}
-
-- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-    CGRect hitArea = CGRectInset(_floatButton.frame, -20, -20);
-    if (CGRectContainsPoint(hitArea, point)) return _floatButton; 
-    return nil;
-}
-
-- (void)show { self.hidden = NO; }
-
-- (void)handlePan:(UIPanGestureRecognizer *)pan {
-    CGPoint translation = [pan translationInView:self];
-    _floatButton.center = CGPointMake(_floatButton.center.x + translation.x, _floatButton.center.y + translation.y);
-    [pan setTranslation:CGPointZero inView:self];
-    
-    if (pan.state == UIGestureRecognizerStateEnded || pan.state == UIGestureRecognizerStateCancelled) {
-        CGFloat screenW = self.bounds.size.width;
-        CGFloat screenH = self.bounds.size.height;
-        CGFloat newX = _floatButton.center.x;
-        CGFloat newY = _floatButton.center.y;
-        
-        if (newX < screenW / 2.0) newX = 25; else newX = screenW - 25;
-        if (newY < 100) newY = 100;
-        if (newY > screenH - 120) newY = screenH - 120;
-        
-        [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.5 options:UIViewAnimationOptionCurveEaseOut animations:^{
-            self->_floatButton.center = CGPointMake(newX, newY);
-        } completion:nil];
-    }
-}
-
-- (void)switchToWaitingColor {
-    CABasicAnimation *pulse = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
-    pulse.duration = 0.6;
-    pulse.fromValue = @1.0;
-    pulse.toValue = @1.3;
-    pulse.autoreverses = YES;
-    pulse.repeatCount = HUGE_VALF;
-    [self.gradientView.layer addAnimation:pulse forKey:@"pulsing"];
-    self.gradientView.layer.borderColor = [UIColor systemYellowColor].CGColor; 
-}
-
-- (void)switchToActiveRecordingColor {
-    self.gradientView.layer.borderColor = [UIColor systemRedColor].CGColor;
-    [DYYYUtils showToast:@"🎙️ 已捕捉到声音，正在录制..."];
-}
-
-- (void)stopPulseAnimation {
-    [self.gradientView.layer removeAnimationForKey:@"pulsing"];
-    self.gradientView.layer.borderColor = [UIColor whiteColor].CGColor;
-}
-
-// ==========================================
-// 🎧 核心掐头去尾录音逻辑 (重构修复版)
+// 🎧 核心掐头去尾录音逻辑 (彻底修复苹果 AVAsset 幽灵缓存Bug)
 // ==========================================
 - (void)handleTap {
     if (!g_isRecordingPCM) {
@@ -1720,7 +1549,9 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
         [self switchToWaitingColor];
         [DYYYUtils showToast:@"⏳ 监听中... 请点开要提取的语音"];
         
-        g_tempAudioPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"dyyy_temp_record.m4a"];
+        // 🌟 核心修复 1：加上精确到毫秒的时间戳，每次都生成绝对不重名的临时文件！绕开苹果的 URL 缓存Bug
+        NSString *tempName = [NSString stringWithFormat:@"dyyy_temp_%.3f.m4a", [[NSDate date] timeIntervalSince1970]];
+        g_tempAudioPath = [NSTemporaryDirectory() stringByAppendingPathComponent:tempName];
         [[NSFileManager defaultManager] removeItemAtPath:g_tempAudioPath error:nil];
         
         NSError *err = nil;
@@ -1768,7 +1599,6 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
                 
                 if (g_firstSoundDetected && g_audioInput.isReadyForMoreMediaData) {
                     [g_audioInput appendSampleBuffer:sampleBuffer];
-                    // ⚠️ 核心修复1：每次追加数据，都实时记录绝对时间，彻底抛弃不靠谱的 asset.duration
                     g_latestAppendedTime = currentTime;
                 }
             }
@@ -1788,20 +1618,19 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
                     
                     // ✂️ 计算去尾时间长度
                     CMTime calculatedDuration = CMTimeSubtract(g_lastSoundTime, g_firstSoundTime);
-                    // 加上 0.3 秒的防切断尾音保护
-                    calculatedDuration = CMTimeAdd(calculatedDuration, CMTimeMake(300, 1000));
+                    calculatedDuration = CMTimeAdd(calculatedDuration, CMTimeMake(300, 1000)); // 加上0.3秒防切断尾音
                     
-                    // 🛡️ 边界保护：用我们刚才亲手打点的最后写入时间计算真实长度！
+                    // 🛡️ 边界保护
                     CMTime actualWrittenDuration = CMTimeSubtract(g_latestAppendedTime, g_firstSoundTime);
                     if (CMTimeCompare(calculatedDuration, actualWrittenDuration) > 0) {
                         calculatedDuration = actualWrittenDuration;
                     }
                     
-                    // ⚡️ 核心修复2：切回 AppleM4A 模式！只有它支持把 AAC 从中间剪断！
                     AVAssetExportSession *exportSession = [[AVAssetExportSession alloc] initWithAsset:asset presetName:AVAssetExportPresetAppleM4A];
                     
                     NSString *targetDir = [[DYYYAudioManager sharedManager] voiceDirectory];
-                    NSString *fileName = [NSString stringWithFormat:@"精剪内录_%ld.m4a", (long)[[NSDate date] timeIntervalSince1970]];
+                    // 🌟 核心修复 2：最终保存的文件名也加上毫秒，防止连续录音导致文件名冲突
+                    NSString *fileName = [NSString stringWithFormat:@"精剪内录_%.3f.m4a", [[NSDate date] timeIntervalSince1970]];
                     NSString *finalPath = [targetDir stringByAppendingPathComponent:fileName];
                     
                     exportSession.outputURL = [NSURL fileURLWithPath:finalPath];
@@ -1809,6 +1638,7 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
                     exportSession.timeRange = CMTimeRangeMake(kCMTimeZero, calculatedDuration);
                     
                     [exportSession exportAsynchronouslyWithCompletionHandler:^{
+                        // 清理这唯一一次的临时文件
                         [[NSFileManager defaultManager] removeItemAtPath:g_tempAudioPath error:nil];
                         
                         dispatch_async(dispatch_get_main_queue(), ^{
@@ -1835,6 +1665,8 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
         }];
     }
 }
+
+
 
 @end
 
