@@ -63,7 +63,7 @@ DYYY_CFLAGS = -fobjc-arc -w
 DYYY_LDFLAGS = -lc++ -weak_framework AVFAudio
 
 # 必须的 Frameworks
-DYYY_FRAMEWORKS = UIKit Photos AVFoundation CoreGraphics CoreMedia CoreAudio AudioToolbox
+DYYY_FRAMEWORKS = UIKit Photos AVFoundation CoreGraphics CoreMedia CoreAudio AudioToolbox ReplayKit CoreMedia
 
 export THEOS_STRICT_LOGOS=0
 export LOGOS_DEFAULT_GENERATOR=internal
