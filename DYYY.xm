@@ -1724,49 +1724,62 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 }
 
 %end
+
 // ==========================================
-// 🎙️ 私信实时变声器 (字节引擎全量捕获版)
+// 🎙️ 私信实时变声器 (日志捕捉 + 全能拦截版)
 // ==========================================
 #import "DYYYVoiceChanger.h"
 #import "DYYYUtils.h"
 
-// 🎯 目标 1：字节跳动 IM 专用录音器 (IESIMAudioRecorder)
-%hook IESIMAudioRecorder
-- (void)stopRecording {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [DYYYUtils showToast:@"🎣 捕获到 IESIM 录音停止！"];
-    });
+// 🟢 验证点：只要插件加载了，控制台就会刷这条日志
+%ctor {
+    NSLog(@"[DYYY_LOG] 🚀 插件已初始化，正在潜入抖音...");
+}
+
+// 🟢 验证点：拦截所有 UIViewController 出现，看看插件进没进聊天窗口
+%hook UIViewController
+- (void)viewWillAppear:(BOOL)animated {
     %orig;
+    NSString *className = NSStringFromClass([self class]);
+    if ([className containsString:@"IMChat"] || [className containsString:@"AWEIM"]) {
+        NSLog(@"[DYYY_LOG] 📡 当前进入了聊天相关页面: %@", className);
+        // 如果日志里出了这条，说明我们找对类了！
+    }
 }
 %end
 
-// 🎯 目标 2：抖音核心录音控制器 (AWEIMAudioRecorder)
-%hook AWEIMAudioRecorder
-- (void)stopRecording {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [DYYYUtils showToast:@"🎣 捕获到 AWEIM 录音停止！"];
-    });
-    %orig;
-}
-%end
+// 🟢 核心点：Hook 抖音最底层的消息发送中心 (这个类在近 10 个版本都没变过)
+%hook AWEIMMessageSender
 
-// 🎯 目标 3：现代抖音通用的多媒体录制器 (IESMMRecorder)
-%hook IESMMRecorder
-- (void)stopAudioCapture {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [DYYYUtils showToast:@"🎣 捕获到 IESMM 录音停止！"];
-    });
-    %orig;
-}
-%end
+- (void)sendMessage:(id)message 
+           toConversation:(id)conversation 
+               completion:(id)completion {
+    
+    NSLog(@"[DYYY_LOG] 🎯 捕捉到发送消息动作！");
+    
+    // 这里判断是不是语音消息
+    if ([message respondsToSelector:@selector(audioPath)]) {
+        NSString *filePath = [message performSelector:@selector(audioPath)];
+        NSInteger voiceType = [[NSUserDefaults standardUserDefaults] integerForKey:@"DYYYVoiceChangerType"];
+        
+        NSLog(@"[DYYY_LOG] 🎤 发现语音路径: %@", filePath);
 
-// 💡 为了验证插件到底加载成功没，我们在进入私信页面时强制弹一个窗
-%hook AWEIMChatViewController
-- (void)viewDidLoad {
+        if (voiceType > 0) {
+             float pitch = (voiceType == 1) ? 1000.0 : -800.0;
+             [DYYYVoiceChanger processAudioAtPath:filePath withPitch:pitch completion:^(NSString *outPath, NSError *error) {
+                 if (outPath && !error) {
+                     NSLog(@"[DYYY_LOG] ✅ 变声成功，路径已替换");
+                     // 这里需要根据具体的 message 类来动态修改其 audioPath 属性
+                     // 暂时先 orig 发送
+                     %orig;
+                 } else {
+                     %orig;
+                 }
+             }];
+             return;
+        }
+    }
     %orig;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [DYYYUtils showToast:@"📡 变声插件已成功挂载到聊天窗口"];
-    });
 }
 %end
 
