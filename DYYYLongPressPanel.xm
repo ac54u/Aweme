@@ -1801,23 +1801,25 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
                     duration = CMTimeAdd(duration, CMTimeMake(300, 1000));
                     
                     // 启动系统级剪辑师进行裁切
+                    // 启动系统级剪辑师进行裁切
                     AVAsset *asset = [AVAsset assetWithURL:[NSURL fileURLWithPath:g_tempAudioPath]];
-                    AVAssetExportSession *export = [[AVAssetExportSession alloc] initWithAsset:asset presetName:AVAssetExportPresetAppleM4A];
+                    // ⚠️ 修复关键字冲突：把变量名从 export 改成 exportSession
+                    AVAssetExportSession *exportSession = [[AVAssetExportSession alloc] initWithAsset:asset presetName:AVAssetExportPresetAppleM4A];
                     
                     NSString *targetDir = [[DYYYAudioManager sharedManager] voiceDirectory];
                     NSString *fileName = [NSString stringWithFormat:@"精剪内录_%ld.m4a", (long)[[NSDate date] timeIntervalSince1970]];
                     NSString *finalPath = [targetDir stringByAppendingPathComponent:fileName];
                     
-                    export.outputURL = [NSURL fileURLWithPath:finalPath];
-                    export.outputFileType = AVFileTypeAppleM4A;
-                    export.timeRange = CMTimeRangeMake(kCMTimeZero, duration);
+                    exportSession.outputURL = [NSURL fileURLWithPath:finalPath];
+                    exportSession.outputFileType = AVFileTypeAppleM4A;
+                    exportSession.timeRange = CMTimeRangeMake(kCMTimeZero, duration);
                     
-                    [export exportAsynchronouslyWithCompletionHandler:^{
+                    [exportSession exportAsynchronouslyWithCompletionHandler:^{
                         // 清理临时文件
                         [[NSFileManager defaultManager] removeItemAtPath:g_tempAudioPath error:nil];
                         
                         dispatch_async(dispatch_get_main_queue(), ^{
-                            if (export.status == AVAssetExportSessionStatusCompleted) {
+                            if (exportSession.status == AVAssetExportSessionStatusCompleted) {
                                 [DYYYUtils showToast:@"✅ ✂️ 掐头去尾成功！原声已存入助手"];
                             } else {
                                 [DYYYUtils showToast:@"❌ 裁剪异常，请重试"];
@@ -1826,18 +1828,7 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
                             g_audioInput = nil;
                         });
                     }];
-                }];
-            } else {
-                // 如果录了半天连个毛都没听到，直接取消
-                [g_assetWriter cancelWriting];
-                [[NSFileManager defaultManager] removeItemAtPath:g_tempAudioPath error:nil];
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [DYYYUtils showToast:@"⚠️ 未捕捉到任何声音"];
-                    g_assetWriter = nil;
-                    g_audioInput = nil;
-                });
-            }
-        }];
+
     }
 }
 @end
