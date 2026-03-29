@@ -1539,10 +1539,13 @@
 
 // =======================================
 // ==========================================
+// ==========================================
+
 
 // ==========================================
-// 🚀 终极核武 (极简+原声音质版)：ReplayKit + AVAssetWriter 内录引擎
+// 🚀 终极核武：渐变悬浮按钮 + 原生内录引擎 (完美复刻版)
 // ==========================================
+#import <UIKit/UIKit.h>
 #import <ReplayKit/ReplayKit.h>
 #import <AVFoundation/AVFoundation.h>
 
@@ -1552,102 +1555,212 @@ static BOOL g_isRecordingPCM = NO;
 static BOOL g_sessionStarted = NO;
 
 // ==========================================
-// 📱 摇一摇开关：苹果原生级无损内录 (Start / Stop)
+// 🔴 自定义全局悬浮按钮 (复刻头像在线小圆点)
 // ==========================================
-%hook UIWindow
-- (void)motionEnded:(UIEventSubtype)motion withEvent:(UIEvent *)event {
-    if (motion == UIEventSubtypeMotionShake) {
+@interface DYYYRecordButton : UIWindow
+@property (nonatomic, strong) UIView *gradientView;
+@property (nonatomic, strong) CAGradientLayer *gradientLayer;
++ (instancetype)sharedButton;
+- (void)show;
+@end
+
+@implementation DYYYRecordButton
+
++ (instancetype)sharedButton {
+    static DYYYRecordButton *shared = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        CGFloat screenW = [UIScreen mainScreen].bounds.size.width;
+        CGFloat screenH = [UIScreen mainScreen].bounds.size.height;
+        // 初始位置：屏幕右侧偏下 (你可以随意拖动)
+        // 尺寸：18x18，完美还原头像右下角状态指示灯的大小
+        shared = [[DYYYRecordButton alloc] initWithFrame:CGRectMake(screenW - 50, screenH * 0.7, 18, 18)];
+    });
+    return shared;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        // 突破天际的层级，保证它永远在最上层
+        self.windowLevel = UIWindowLevelAlert + 999;
+        self.backgroundColor = [UIColor clearColor];
+        self.clipsToBounds = NO; // 允许阴影溢出
         
-        // 🔴【开始录制】
-        if (!g_isRecordingPCM) {
-            g_isRecordingPCM = YES;
-            g_sessionStarted = NO;
-            
-            NSString *targetDir = [[DYYYAudioManager sharedManager] voiceDirectory];
-            NSString *fileName = [NSString stringWithFormat:@"无损内录_%ld.m4a", (long)[[NSDate date] timeIntervalSince1970]];
-            NSString *targetPath = [targetDir stringByAppendingPathComponent:fileName];
-            
-            // 初始化原生音频写入器 (直接输出 M4A 格式)
-            NSError *err = nil;
-            g_assetWriter = [[AVAssetWriter alloc] initWithURL:[NSURL fileURLWithPath:targetPath] fileType:AVFileTypeAppleM4A error:&err];
-            
-            // 配置高音质 AAC 编码
-            AudioChannelLayout acl;
-            bzero(&acl, sizeof(acl));
-            acl.mChannelLayoutTag = kAudioChannelLayoutTag_Stereo;
-            NSDictionary *audioSettings = @{
-                AVFormatIDKey: @(kAudioFormatMPEG4AAC),
-                AVNumberOfChannelsKey: @(2),
-                AVSampleRateKey: @(44100.0),
-                AVEncoderBitRateKey: @(128000),
-                AVChannelLayoutKey: [NSData dataWithBytes:&acl length:sizeof(acl)]
-            };
-            
-            g_audioInput = [[AVAssetWriterInput alloc] initWithMediaType:AVMediaTypeAudio outputSettings:audioSettings];
-            g_audioInput.expectsMediaDataInRealTime = YES;
-            
-            if ([g_assetWriter canAddInput:g_audioInput]) {
-                [g_assetWriter addInput:g_audioInput];
-            }
-            [g_assetWriter startWriting];
-            
-            // 启动底层录音 (只录 App 声音，不录麦克风)
-            RPScreenRecorder *recorder = [RPScreenRecorder sharedRecorder];
-            recorder.microphoneEnabled = NO; 
-            
-            [recorder startCaptureWithHandler:^(CMSampleBufferRef sampleBuffer, RPSampleBufferType bufferType, NSError *error) {
-                // 🎯 拦截纯粹的内部声音
-                if (bufferType == RPSampleBufferTypeAudioApp) {
-                    if (!g_sessionStarted) {
-                        g_sessionStarted = YES;
-                        // 记录第一帧的时间戳
-                        [g_assetWriter startSessionAtSourceTime:CMSampleBufferGetPresentationTimeStamp(sampleBuffer)];
-                    }
-                    if (g_audioInput.isReadyForMoreMediaData) {
-                        // 自动硬件编码并写入文件！完全不需要我们操心格式！
-                        [g_audioInput appendSampleBuffer:sampleBuffer];
-                    }
+        // 1. 核心视觉容器
+        _gradientView = [[UIView alloc] initWithFrame:self.bounds];
+        _gradientView.layer.cornerRadius = frame.size.width / 2.0;
+        _gradientView.clipsToBounds = YES;
+        
+        // 2. 完美复刻白色描边
+        _gradientView.layer.borderWidth = 2.0;
+        _gradientView.layer.borderColor = [UIColor whiteColor].CGColor;
+        
+        // 3. 完美复刻 绿蓝渐变色
+        _gradientLayer = [CAGradientLayer layer];
+        _gradientLayer.frame = _gradientView.bounds;
+        _gradientLayer.colors = @[
+            (__bridge id)[UIColor colorWithRed:0.0 green:0.89 blue:0.59 alpha:1.0].CGColor, // 顶部：清新绿
+            (__bridge id)[UIColor colorWithRed:0.16 green:0.47 blue:1.0 alpha:1.0].CGColor  // 底部：深邃蓝
+        ];
+        _gradientLayer.startPoint = CGPointMake(0.2, 0);
+        _gradientLayer.endPoint = CGPointMake(0.8, 1);
+        [_gradientView.layer addSublayer:_gradientLayer];
+        
+        [self addSubview:_gradientView];
+        
+        // 4. 添加一点隐形阴影，让它在纯白背景下也能看清边缘
+        self.layer.shadowColor = [UIColor blackColor].CGColor;
+        self.layer.shadowOffset = CGSizeMake(0, 1);
+        self.layer.shadowOpacity = 0.2;
+        self.layer.shadowRadius = 2;
+        
+        // 5. 绑定手势：点击(录音/停止) + 拖拽(移动位置)
+        UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTap)];
+        [self addGestureRecognizer:tap];
+        
+        UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
+        [self addGestureRecognizer:pan];
+    }
+    return self;
+}
+
+- (void)show {
+    self.hidden = NO;
+}
+
+// ⚠️ 物理外挂：18x18 的点太小，手指很难点中。这里强行扩大它的“触控响应热区”到 44x44，闭着眼睛都能点到！
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
+    CGRect hitArea = CGRectInset(self.bounds, -15, -15);
+    return CGRectContainsPoint(hitArea, point);
+}
+
+// 支持全屏幕随意拖拽
+- (void)handlePan:(UIPanGestureRecognizer *)pan {
+    CGPoint translation = [pan translationInView:self.superview];
+    self.center = CGPointMake(self.center.x + translation.x, self.center.y + translation.y);
+    [pan setTranslation:CGPointZero inView:self.superview];
+}
+
+// 🌟 录音时的“呼吸灯”动画
+- (void)startPulseAnimation {
+    CABasicAnimation *pulse = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
+    pulse.duration = 0.6;
+    pulse.fromValue = @1.0;
+    pulse.toValue = @1.3; // 录音时微微变大呼吸
+    pulse.autoreverses = YES;
+    pulse.repeatCount = HUGE_VALF;
+    [self.gradientView.layer addAnimation:pulse forKey:@"pulsing"];
+    
+    // 录音时描边变成红色警告
+    self.gradientView.layer.borderColor = [UIColor colorWithRed:1.0 green:0.2 blue:0.2 alpha:1.0].CGColor;
+}
+
+- (void)stopPulseAnimation {
+    [self.gradientView.layer removeAnimationForKey:@"pulsing"];
+    // 恢复白边
+    self.gradientView.layer.borderColor = [UIColor whiteColor].CGColor;
+}
+
+// ==========================================
+// 🎧 核心录音逻辑 (绑定在悬浮按钮的点击上)
+// ==========================================
+- (void)handleTap {
+    // 🔴【开始录制】
+    if (!g_isRecordingPCM) {
+        g_isRecordingPCM = YES;
+        g_sessionStarted = NO;
+        
+        [self startPulseAnimation]; // 开启呼吸灯动画
+        
+        NSString *targetDir = [[DYYYAudioManager sharedManager] voiceDirectory];
+        NSString *fileName = [NSString stringWithFormat:@"无损内录_%ld.m4a", (long)[[NSDate date] timeIntervalSince1970]];
+        NSString *targetPath = [targetDir stringByAppendingPathComponent:fileName];
+        
+        NSError *err = nil;
+        g_assetWriter = [[AVAssetWriter alloc] initWithURL:[NSURL fileURLWithPath:targetPath] fileType:AVFileTypeAppleM4A error:&err];
+        
+        AudioChannelLayout acl;
+        bzero(&acl, sizeof(acl));
+        acl.mChannelLayoutTag = kAudioChannelLayoutTag_Stereo;
+        NSDictionary *audioSettings = @{
+            AVFormatIDKey: @(kAudioFormatMPEG4AAC),
+            AVNumberOfChannelsKey: @(2),
+            AVSampleRateKey: @(44100.0),
+            AVEncoderBitRateKey: @(128000),
+            AVChannelLayoutKey: [NSData dataWithBytes:&acl length:sizeof(acl)]
+        };
+        
+        g_audioInput = [[AVAssetWriterInput alloc] initWithMediaType:AVMediaTypeAudio outputSettings:audioSettings];
+        g_audioInput.expectsMediaDataInRealTime = YES;
+        
+        if ([g_assetWriter canAddInput:g_audioInput]) {
+            [g_assetWriter addInput:g_audioInput];
+        }
+        [g_assetWriter startWriting];
+        
+        RPScreenRecorder *recorder = [RPScreenRecorder sharedRecorder];
+        recorder.microphoneEnabled = NO; 
+        
+        [recorder startCaptureWithHandler:^(CMSampleBufferRef sampleBuffer, RPSampleBufferType bufferType, NSError *error) {
+            if (bufferType == RPSampleBufferTypeAudioApp) {
+                if (!g_sessionStarted) {
+                    g_sessionStarted = YES;
+                    [g_assetWriter startSessionAtSourceTime:CMSampleBufferGetPresentationTimeStamp(sampleBuffer)];
                 }
-            } completionHandler:^(NSError *error) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    if (error) {
-                        [DYYYUtils showToast:@"❌ 截获启动失败，请检查系统权限"];
-                        g_isRecordingPCM = NO;
-                    } else {
-                        [DYYYUtils showToast:@"🔴 正在录制...\n请播放要提取的语音，听完后再次摇一摇"];
-                    }
-                });
-            }];
-        } 
-        // ⏹️【停止录制并保存】
-        else {
-            g_isRecordingPCM = NO;
-            [[RPScreenRecorder sharedRecorder] stopCaptureWithHandler:^(NSError *error) {
-                // 必须在有音频数据写入的情况下才能 Finish，否则会崩溃
-                if (g_sessionStarted) {
-                    [g_audioInput markAsFinished];
-                    [g_assetWriter finishWritingWithCompletionHandler:^{
-                        dispatch_async(dispatch_get_main_queue(), ^{
-                            [DYYYUtils showToast:@"✅ 提取完美成功！(m4a 原声音质)"];
-                            g_assetWriter = nil;
-                            g_audioInput = nil;
-                        });
-                    }];
+                if (g_audioInput.isReadyForMoreMediaData) {
+                    [g_audioInput appendSampleBuffer:sampleBuffer];
+                }
+            }
+        } completionHandler:^(NSError *error) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (error) {
+                    [DYYYUtils showToast:@"❌ 截获启动失败，请检查系统权限"];
+                    g_isRecordingPCM = NO;
+                    [self stopPulseAnimation];
                 } else {
-                    [g_assetWriter cancelWriting];
+                    [DYYYUtils showToast:@"🔴 正在录制... 听完后再次点击圆点结束"];
+                }
+            });
+        }];
+    } 
+    // ⏹️【停止录制并保存】
+    else {
+        g_isRecordingPCM = NO;
+        [self stopPulseAnimation]; // 停止呼吸灯
+        
+        [[RPScreenRecorder sharedRecorder] stopCaptureWithHandler:^(NSError *error) {
+            if (g_sessionStarted) {
+                [g_audioInput markAsFinished];
+                [g_assetWriter finishWritingWithCompletionHandler:^{
                     dispatch_async(dispatch_get_main_queue(), ^{
-                        [DYYYUtils showToast:@"⚠️ 未捕捉到任何声音\n(刚才没有播放语音)"];
+                        [DYYYUtils showToast:@"✅ 提取完美成功！已保存至助手"];
                         g_assetWriter = nil;
                         g_audioInput = nil;
                     });
-                }
-            }];
-        }
+                }];
+            } else {
+                [g_assetWriter cancelWriting];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [DYYYUtils showToast:@"⚠️ 未捕捉到任何声音"];
+                    g_assetWriter = nil;
+                    g_audioInput = nil;
+                });
+            }
+        }];
     }
-    %orig;
 }
-%end
+@end
 
+// ==========================================
+// 🚀 插件加载时自动显示悬浮窗
+// ==========================================
+%ctor {
+    // 延迟 3 秒显示，确保抖音的主界面已经加载完毕
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [[DYYYRecordButton sharedButton] show];
+    });
+}
 
 
 
