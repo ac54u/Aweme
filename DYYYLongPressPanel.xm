@@ -1537,144 +1537,132 @@
 %end
 
 
+// =======================================
 // ==========================================
-// 🚀 终极核武：AudioUnit PCM 物理级截获引擎
+// 🚀 终极核武 (安全不闪退版)：ReplayKit 物理级 PCM 截获引擎
 // ==========================================
-#import <AudioToolbox/AudioToolbox.h>
-#import <substrate.h>
+#import <ReplayKit/ReplayKit.h>
+#import <CoreMedia/CoreMedia.h>
 
-// 分配 10MB 的内存，用于存放 PCM 数据（大约能录 1 分钟）
-#define MAX_PCM_SIZE (1024 * 1024 * 10) 
-static uint8_t *g_pcmBuffer = NULL;
-static size_t g_pcmOffset = 0;
+static NSMutableData *g_pcmData = nil;
 static BOOL g_isRecordingPCM = NO;
+static Float64 g_sampleRate = 44100.0;
+static UInt32 g_channels = 2;
+static UInt32 g_bitsPerChannel = 16;
+static BOOL g_isFloat = NO;
 
-// 保存原始的 AudioUnitRender 函数指针
-static OSStatus (*orig_AudioUnitRender)(AudioUnit inUnit,
-                                        AudioUnitRenderActionFlags *ioActionFlags,
-                                        const AudioTimeStamp *inTimeStamp,
-                                        UInt32 inOutputBusNumber,
-                                        UInt32 inNumberFrames,
-                                        AudioBufferList *ioData);
-
-// 💥 我们自己的拦截器：每一帧音频输出前，都会经过这里！
-static OSStatus replaced_AudioUnitRender(AudioUnit inUnit,
-                                         AudioUnitRenderActionFlags *ioActionFlags,
-                                         const AudioTimeStamp *inTimeStamp,
-                                         UInt32 inOutputBusNumber,
-                                         UInt32 inNumberFrames,
-                                         AudioBufferList *ioData) {
-    
-    // 1. 先让原始引擎去渲染出真实的 PCM 声音
-    OSStatus status = orig_AudioUnitRender(inUnit, ioActionFlags, inTimeStamp, inOutputBusNumber, inNumberFrames, ioData);
-    
-    // 2. 如果状态正常，且我们开启了“录音开关”，且有数据
-    if (status == noErr && g_isRecordingPCM && ioData != NULL) {
-        // 遍历所有的音频缓冲区 (通常是左声道/右声道，或者交错双声道)
-        for (UInt32 i = 0; i < ioData->mNumberBuffers; i++) {
-            AudioBuffer buffer = ioData->mBuffers[i];
-            if (buffer.mData != NULL && buffer.mDataByteSize > 0) {
-                // 确保不要内存溢出
-                size_t bytesToCopy = buffer.mDataByteSize;
-                if (g_pcmOffset + bytesToCopy < MAX_PCM_SIZE) {
-                    // 直接把 PCM 数据拷贝到我们的全局大缸里！这就是最纯粹的声音！
-                    memcpy(g_pcmBuffer + g_pcmOffset, buffer.mData, bytesToCopy);
-                    g_pcmOffset += bytesToCopy;
-                }
-            }
-        }
-    }
-    return status;
-}
-
-// 帮裸 PCM 数据穿上 WAV 的衣服，否则系统播放器不认识它
-static NSData *DYYY_WrapPCMToWAV(void *pcmData, size_t dataSize) {
-    int sampleRate = 44100; // 默认 44.1kHz
-    int channels = 2;       // 默认立体声
-    int bitsPerSample = 32; // iOS 底层混音器通常输出 32-bit Float
-    int byteRate = sampleRate * channels * (bitsPerSample / 8);
-    int blockAlign = channels * (bitsPerSample / 8);
-
+// 给赤裸裸的 PCM 数据穿上 WAV 的衣服
+static NSData *DYYY_WrapPCMToWAV(NSData *pcmData, int sampleRate, int channels, int bits, BOOL isFloat) {
     NSMutableData *wavData = [[NSMutableData alloc] init];
     [wavData appendBytes:"RIFF" length:4];
-    int chunkSize = 36 + (int)dataSize;
+    int chunkSize = 36 + (int)pcmData.length;
     [wavData appendBytes:&chunkSize length:4];
     [wavData appendBytes:"WAVE" length:4];
     [wavData appendBytes:"fmt " length:4];
     int subchunk1Size = 16;
     [wavData appendBytes:&subchunk1Size length:4];
-    short audioFormat = 3; // 3 代表 32-bit Float
+    short audioFormat = isFloat ? 3 : 1; 
     [wavData appendBytes:&audioFormat length:2];
-    [wavData appendBytes:&channels length:2];
-    [wavData appendBytes:&sampleRate length:4];
+    short numChannels = channels;
+    [wavData appendBytes:&numChannels length:2];
+    int sr = sampleRate;
+    [wavData appendBytes:&sr length:4];
+    int byteRate = sampleRate * channels * (bits / 8);
     [wavData appendBytes:&byteRate length:4];
+    short blockAlign = channels * (bits / 8);
     [wavData appendBytes:&blockAlign length:2];
-    [wavData appendBytes:&bitsPerSample length:2];
+    short bps = bits;
+    [wavData appendBytes:&bps length:2];
     [wavData appendBytes:"data" length:4];
+    int dataSize = (int)pcmData.length;
     [wavData appendBytes:&dataSize length:4];
-    
-    // 塞入我们在底层抓到的灵魂
-    [wavData appendBytes:pcmData length:dataSize];
+    [wavData appendData:pcmData];
     return wavData;
 }
 
-
 // ==========================================
-// 📱 摇一摇开关：物理录音机 (Start / Stop)
+// 📱 摇一摇开关：系统级内部录音机 (Start / Stop)
 // ==========================================
 %hook UIWindow
 - (void)motionEnded:(UIEventSubtype)motion withEvent:(UIEvent *)event {
     if (motion == UIEventSubtypeMotionShake) {
         
-        // 如果当前没有录音，则【开始录制】
         if (!g_isRecordingPCM) {
-            g_pcmOffset = 0; // 清空旧数据
             g_isRecordingPCM = YES;
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [DYYYUtils showToast:@"🔴 已开启底层录音\n请点开评论语音，听完后再次摇一摇！"];
-            });
-        } 
-        // 如果正在录音，则【停止并保存】
-        else {
-            g_isRecordingPCM = NO;
-            if (g_pcmOffset > 0) {
-                // 给 PCM 数据加上 WAV 头
-                NSData *wavData = DYYY_WrapPCMToWAV(g_pcmBuffer, g_pcmOffset);
-                
-                NSString *targetDir = [[DYYYAudioManager sharedManager] voiceDirectory];
-                NSString *fileName = [NSString stringWithFormat:@"底层截获_%ld.wav", (long)[[NSDate date] timeIntervalSince1970]];
-                NSString *targetPath = [targetDir stringByAppendingPathComponent:fileName];
-                
-                if ([wavData writeToFile:targetPath atomically:YES]) {
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        [DYYYUtils showToast:@"✅ 物理截获成功！底层声音已存入助手！"];
-                    });
-                } else {
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        [DYYYUtils showToast:@"❌ 写入文件失败"];
-                    });
+            g_pcmData = [[NSMutableData alloc] init];
+            
+            RPScreenRecorder *recorder = [RPScreenRecorder sharedRecorder];
+            recorder.microphoneEnabled = NO; // 🛑 核心：绝对纯净，拒绝麦克风杂音！
+            
+            [recorder startCaptureWithHandler:^(CMSampleBufferRef sampleBuffer, RPSampleBufferType bufferType, NSError *error) {
+                // 🎯 精准打击：只截获 App 内部发送给扬声器的真实声音
+                if (bufferType == RPSampleBufferTypeAudioApp) {
+                    
+                    // 1. 动态获取音频真实格式 (解决杂音/加速问题)
+                    if (g_pcmData.length == 0) {
+                        CMAudioFormatDescriptionRef format = CMSampleBufferGetFormatDescription(sampleBuffer);
+                        const AudioStreamBasicDescription *asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format);
+                        if (asbd) {
+                            g_sampleRate = asbd->mSampleRate;
+                            g_channels = asbd->mChannelsPerFrame;
+                            g_bitsPerChannel = asbd->mBitsPerChannel;
+                            g_isFloat = (asbd->mFormatFlags & kAudioFormatFlagIsFloat) != 0;
+                        }
+                    }
+                    
+                    // 2. 核心突破：从系统缓存池中强行抽出你想要的 AudioBufferList！
+                    CMBlockBufferRef blockBuffer = NULL;
+                    AudioBufferList audioBufferList;
+                    CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sampleBuffer, NULL, &audioBufferList, sizeof(audioBufferList), NULL, NULL, kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, &blockBuffer);
+                    
+                    for (int i = 0; i < audioBufferList.mNumberBuffers; i++) {
+                        AudioBuffer audioBuffer = audioBufferList.mBuffers[i];
+                        if (audioBuffer.mData && audioBuffer.mDataByteSize > 0) {
+                            [g_pcmData appendBytes:audioBuffer.mData length:audioBuffer.mDataByteSize];
+                        }
+                    }
+                    if (blockBuffer) CFRelease(blockBuffer);
                 }
-            } else {
+            } completionHandler:^(NSError *error) {
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    [DYYYUtils showToast:@"⚠️ 未捕捉到任何声音\n(可能静音或没有播放)"];
+                    if (error) {
+                        [DYYYUtils showToast:[NSString stringWithFormat:@"❌ 截获启动失败: %@", error.localizedDescription]];
+                        g_isRecordingPCM = NO;
+                    } else {
+                        [DYYYUtils showToast:@"🔴 已开启内部 PCM 截获\n请播放评论语音，听完后再次摇一摇！"];
+                    }
                 });
-            }
+            }];
+            
+        } else {
+            g_isRecordingPCM = NO;
+            [[RPScreenRecorder sharedRecorder] stopCaptureWithHandler:^(NSError *error) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (g_pcmData.length > 0) {
+                        // 将提取出的 PCM 数据封装成标准的 WAV 音频文件
+                        NSData *wavData = DYYY_WrapPCMToWAV(g_pcmData, g_sampleRate, g_channels, g_bitsPerChannel, g_isFloat);
+                        
+                        NSString *targetDir = [[DYYYAudioManager sharedManager] voiceDirectory];
+                        NSString *fileName = [NSString stringWithFormat:@"纯净内录_%ld.wav", (long)[[NSDate date] timeIntervalSince1970]];
+                        NSString *targetPath = [targetDir stringByAppendingPathComponent:fileName];
+                        
+                        if ([wavData writeToFile:targetPath atomically:YES]) {
+                            [DYYYUtils showToast:@"✅ 物理截获成功！纯净声音已存入助手！"];
+                        } else {
+                            [DYYYUtils showToast:@"❌ 写入文件失败"];
+                        }
+                        g_pcmData = nil;
+                    } else {
+                        [DYYYUtils showToast:@"⚠️ 未捕捉到任何内部声音"];
+                    }
+                });
+            }];
         }
     }
     %orig;
 }
 %end
 
-// ==========================================
-// 🚀 初始化 Hook 引擎
-// ==========================================
-%ctor {
-    // 插件加载时，分配全局内存缸
-    g_pcmBuffer = (uint8_t *)malloc(MAX_PCM_SIZE);
-    
-    // 暴力替换系统的 AudioUnitRender 函数！
-    MSHookFunction((void *)AudioUnitRender, (void *)replaced_AudioUnitRender, (void **)&orig_AudioUnitRender);
-}
 
 
 
