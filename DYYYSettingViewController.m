@@ -451,7 +451,7 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
         return @[ @"蓝光帧彩", @"蓝光", @"超清", @"高清", @"标清", @"自动" ];
     } else if ([key isEqualToString:@"DYYYVoiceChangerType"]) {
         // 🔥 补齐：让变声器选项有这三个选项值
-        return @[ @0, @1, @2 ];
+        return @[ @0, @1, @2, @3, @4, @5 ];
     }
     return @[];
 }
