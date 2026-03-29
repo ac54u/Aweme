@@ -1725,52 +1725,50 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 
 %end
 // ==========================================
-// 🎙️ 私信实时变声器 (系统级录音拦截)
+// 🎙️ 私信实时变声器 (字节引擎全量捕获版)
 // ==========================================
 #import "DYYYVoiceChanger.h"
 #import "DYYYUtils.h"
-#import <AVFoundation/AVFoundation.h>
 
-%hook AVAudioRecorder
-
-// 当录音停止时，苹果会调用这个方法
-- (void)stop {
-    // 拿到原始录音文件的路径
-    NSURL *url = [self url];
-    NSString *filePath = url.path;
-    
-    NSInteger voiceType = [[NSUserDefaults standardUserDefaults] integerForKey:@"DYYYVoiceChangerType"];
-
-    // 只要录音停止，我们就弹窗确认（哪怕没开变声，也要弹这个来确认 Hook 成功了）
+// 🎯 目标 1：字节跳动 IM 专用录音器 (IESIMAudioRecorder)
+%hook IESIMAudioRecorder
+- (void)stopRecording {
     dispatch_async(dispatch_get_main_queue(), ^{
-        [DYYYUtils showToast:[NSString stringWithFormat:@"🎤 系统录音机拦截！模式: %ld", (long)voiceType]];
+        [DYYYUtils showToast:@"🎣 捕获到 IESIM 录音停止！"];
     });
-
-    if (voiceType == 0) {
-        %orig;
-        return;
-    }
-
-    float pitch = (voiceType == 1) ? 1000.0 : -800.0;
-
-    // 开始变声处理
-    [DYYYVoiceChanger processAudioAtPath:filePath withPitch:pitch completion:^(NSString *outPath, NSError *error) {
-        if (outPath && !error) {
-            // ✅ 核心操作：变声成功后，用变声后的文件覆盖掉原始录音文件！
-            // 这样抖音去读这个文件时，读到的就是变声后的。
-            NSData *fakeData = [NSData dataWithContentsOfFile:outPath];
-            [fakeData writeToFile:filePath atomically:YES];
-            
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [DYYYUtils showToast:@"✅ 变声已原地替换完成！"];
-            });
-        }
-        %orig; // 必须调用原方法来真正关闭录音机
-    }];
+    %orig;
 }
-
 %end
 
+// 🎯 目标 2：抖音核心录音控制器 (AWEIMAudioRecorder)
+%hook AWEIMAudioRecorder
+- (void)stopRecording {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [DYYYUtils showToast:@"🎣 捕获到 AWEIM 录音停止！"];
+    });
+    %orig;
+}
+%end
+
+// 🎯 目标 3：现代抖音通用的多媒体录制器 (IESMMRecorder)
+%hook IESMMRecorder
+- (void)stopAudioCapture {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [DYYYUtils showToast:@"🎣 捕获到 IESMM 录音停止！"];
+    });
+    %orig;
+}
+%end
+
+// 💡 为了验证插件到底加载成功没，我们在进入私信页面时强制弹一个窗
+%hook AWEIMChatViewController
+- (void)viewDidLoad {
+    %orig;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [DYYYUtils showToast:@"📡 变声插件已成功挂载到聊天窗口"];
+    });
+}
+%end
 
 // 屏蔽版本更新
 %hook AWEVersionUpdateManager

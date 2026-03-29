@@ -3,6 +3,7 @@
         Bundles = (
             "com.ss.iphone.ugc.Aweme",
             "com.ss.iphone.ugc.aweme.lite"
+            "com.bytedance.bim"
         );
         Executables = (
             "Aweme",
