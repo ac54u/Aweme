@@ -11,7 +11,7 @@
 #import "DYYYVoiceViewController.h"
 #import <AVFoundation/AVFoundation.h>
 
-// ==========================================
+// =========================================
 // 完美声明区
 // ==========================================
 @interface DYYYManager (Download)
@@ -1827,8 +1827,8 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
                             g_assetWriter = nil;
                             g_audioInput = nil;
                         });
-                    }];
-
+                    }
+         }];
     }
 }
 @end
