@@ -1724,63 +1724,67 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 }
 
 %end
-
 // ==========================================
-// 🎙️ 私信实时变声器 (撒大网版)
+// 🎙️ 私信实时变声器 (消息工厂拦截版)
 // ==========================================
 #import "DYYYVoiceChanger.h"
 #import "DYYYUtils.h"
 
-// 🎯 目标 1：老版本或某些特定数据管家
-%hook AWEIMMessageDataManager
-- (void)sendAudioMessageWithFilePath:(NSString *)filePath duration:(NSTimeInterval)duration completion:(id)completionBlock {
+// 🎯 目标 1：现代抖音最核心的消息包装类
+%hook AWEIMMessage
+
++ (id)messageWithAudioPath:(NSString *)filePath duration:(NSTimeInterval)duration {
     NSInteger voiceType = [[NSUserDefaults standardUserDefaults] integerForKey:@"DYYYVoiceChangerType"];
-    dispatch_async(dispatch_get_main_queue(), ^{ [DYYYUtils showToast:@"🎯 命中 1: DataManager"]; });
     
-    if (voiceType == 0) { %orig; return; }
-    
+    // 强制弹窗，看看到底走没走这里
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [DYYYUtils showToast:[NSString stringWithFormat:@"🚀 捕捉到消息对象！模式: %ld", (long)voiceType]];
+    });
+
+    if (voiceType == 0) return %orig;
+
     float pitch = (voiceType == 1) ? 1000.0 : -800.0;
+    
+    // 这里由于是同步创建对象，我们需要一个简单的变量来承接
+    __block NSString *finalPath = filePath;
+    
+    // 这种工厂方法通常希望立即返回，但变声需要一点时间。
+    // 我们在这里尝试同步处理（因为 AVAudioEngine 离线渲染极快）
+    dispatch_semaphore_t sema = dispatch_semaphore_create(0);
     [DYYYVoiceChanger processAudioAtPath:filePath withPitch:pitch completion:^(NSString *outPath, NSError *error) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (outPath && !error) { %orig(outPath, duration, completionBlock); }
-            else { %orig(filePath, duration, completionBlock); }
-        });
+        if (outPath && !error) {
+            finalPath = outPath;
+        }
+        dispatch_semaphore_signal(sema);
     }];
+    dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC))); // 最多等 0.5 秒
+
+    return %orig(finalPath, duration);
 }
 %end
 
-// 🎯 目标 2 & 3：新版本最喜欢用的 ViewModel 视图模型
-%hook AWEIMChatViewModel
+// 🎯 目标 2：如果上面没中，Hook 录音完成的代理（这是更前置的 UI 层）
+%hook AWEIMChatInputView
 
-// 变种 A
-- (void)sendAudioWithFilePath:(NSString *)filePath duration:(NSTimeInterval)duration {
+- (void)audioRecorderDidFinishRecording:(id)recorder filePath:(NSString *)filePath duration:(NSTimeInterval)duration {
     NSInteger voiceType = [[NSUserDefaults standardUserDefaults] integerForKey:@"DYYYVoiceChangerType"];
-    dispatch_async(dispatch_get_main_queue(), ^{ [DYYYUtils showToast:@"🎯 命中 2: ViewModel_Long"]; });
-    
-    if (voiceType == 0) { %orig; return; }
-    
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [DYYYUtils showToast:@"🎤 录音结束，准备变声..."];
+    });
+
+    if (voiceType == 0) {
+        %orig;
+        return;
+    }
+
     float pitch = (voiceType == 1) ? 1000.0 : -800.0;
     [DYYYVoiceChanger processAudioAtPath:filePath withPitch:pitch completion:^(NSString *outPath, NSError *error) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (outPath && !error) { %orig(outPath, duration); }
-            else { %orig(filePath, duration); }
-        });
-    }];
-}
-
-// 变种 B
-- (void)sendAudio:(NSString *)filePath duration:(NSTimeInterval)duration {
-    NSInteger voiceType = [[NSUserDefaults standardUserDefaults] integerForKey:@"DYYYVoiceChangerType"];
-    dispatch_async(dispatch_get_main_queue(), ^{ [DYYYUtils showToast:@"🎯 命中 3: ViewModel_Short"]; });
-    
-    if (voiceType == 0) { %orig; return; }
-    
-    float pitch = (voiceType == 1) ? 1000.0 : -800.0;
-    [DYYYVoiceChanger processAudioAtPath:filePath withPitch:pitch completion:^(NSString *outPath, NSError *error) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (outPath && !error) { %orig(outPath, duration); }
-            else { %orig(filePath, duration); }
-        });
+        if (outPath && !error) {
+            // ✅ 用变声后的文件替换原文件发送
+            %orig(recorder, outPath, duration);
+        } else {
+            %orig;
+        }
     }];
 }
 %end
