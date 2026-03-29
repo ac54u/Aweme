@@ -1646,18 +1646,18 @@ static NSString *DYYY_FindLatestMediaCache() {
 }
 
 // ==========================================
-// 📱 摇一摇触发 (强制变装 .m4a 保证 UI 显示)
+// 📱 摇一摇触发 (修复 Block 内部 goto 跨域报错版)
 // ==========================================
 %hook UIWindow
 - (void)motionEnded:(UIEventSubtype)motion withEvent:(UIEvent *)event {
     if (motion == UIEventSubtypeMotionShake) {
         
         NSString *targetDir = [[DYYYAudioManager sharedManager] voiceDirectory];
-        // ⚠️ 核心修复：不管抓到的是什么牛鬼蛇神，全部强行加上 .m4a 后缀！防止音频助手列表过滤！
+        // 强制披上 .m4a 外衣，保证音频助手列表可见
         NSString *fileName = [NSString stringWithFormat:@"提取语音_%ld.m4a", (long)[[NSDate date] timeIntervalSince1970]];
         NSString *targetPath = [targetDir stringByAppendingPathComponent:fileName];
         
-        // 优先检查雷达是否抓到了本地文件 (私信)
+        // 🌟 场景 1：雷达抓到了本地文件 (私信)
         if (!g_isLastCapturedNetwork && g_lastCapturedAudioPath && [[NSFileManager defaultManager] fileExistsAtPath:g_lastCapturedAudioPath]) {
             NSError *error = nil;
             [[NSFileManager defaultManager] copyItemAtPath:g_lastCapturedAudioPath toPath:targetPath error:&error];
@@ -1669,47 +1669,51 @@ static NSString *DYYY_FindLatestMediaCache() {
                     [DYYYUtils showToast:@"❌ 私信提取失败"];
                 }
             });
-            %orig;
-            return;
         }
-        
-        // 如果雷达抓到了网络文件 (评论区 HTTP)
-        if (g_isLastCapturedNetwork && g_lastCapturedAudioPath) {
+        // 🌟 场景 2：雷达抓到了网络文件 (评论区 HTTP)
+        else if (g_isLastCapturedNetwork && g_lastCapturedAudioPath) {
             dispatch_async(dispatch_get_main_queue(), ^{ [DYYYUtils showToast:@"⏳ 正在下载网络语音..."]; });
             NSString *downloadUrl = g_lastCapturedAudioPath; 
+            
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
                 NSData *audioData = [NSData dataWithContentsOfURL:[NSURL URLWithString:downloadUrl]];
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    if (audioData && [audioData writeToFile:targetPath atomically:YES]) {
+                
+                if (audioData && [audioData writeToFile:targetPath atomically:YES]) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
                         [DYYYUtils showToast:@"✅ 评论语音已下载至助手！"];
                         g_lastCapturedAudioPath = nil;
+                    });
+                } else {
+                    // ⚠️ 网络下载失败，在当前异步线程直接执行物理捞针兜底，拒绝 goto！
+                    NSString *cachePath = DYYY_FindLatestMediaCache();
+                    if (cachePath) {
+                        NSError *error = nil;
+                        [[NSFileManager defaultManager] copyItemAtPath:cachePath toPath:targetPath error:&error];
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            if (!error) [DYYYUtils showToast:@"✅ 底层缓存强制提取成功！(m4a)"];
+                            else [DYYYUtils showToast:@"❌ 底层提取失败"];
+                        });
                     } else {
-                        // 网络下载失败，降级使用物理捞针法
-                        goto BRUTE_FORCE_FALLBACK;
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            [DYYYUtils showToast:@"⚠️ 网络异常，底层也未抓到语音\n请重新听一遍再摇"];
+                        });
                     }
-                });
+                }
             });
-            %orig;
-            return;
         }
-
-BRUTE_FORCE_FALLBACK:
-        // 如果雷达瞎了，启用底层数据捞针
-        {
+        // 🌟 场景 3：雷达完全没反应，直接启动底层数据流扫描
+        else {
             NSString *cachePath = DYYY_FindLatestMediaCache();
             if (cachePath) {
                 NSError *error = nil;
                 [[NSFileManager defaultManager] copyItemAtPath:cachePath toPath:targetPath error:&error];
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    if (!error) {
-                        [DYYYUtils showToast:@"✅ 底层缓存强制提取成功！(m4a)"];
-                    } else {
-                        [DYYYUtils showToast:@"❌ 底层提取失败"];
-                    }
+                    if (!error) [DYYYUtils showToast:@"✅ 底层缓存强制提取成功！(m4a)"];
+                    else [DYYYUtils showToast:@"❌ 底层提取失败"];
                 });
             } else {
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    [DYYYUtils showToast:@"⚠️ 未捕捉到语音\n请重新点开播放后再摇一摇"];
+                    [DYYYUtils showToast:@"⚠️ 未捕捉到语音\n请点开播放出声后再立刻摇一摇"];
                 });
             }
         }
