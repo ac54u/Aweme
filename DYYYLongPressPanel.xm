@@ -1538,182 +1538,125 @@
 
 
 // ==========================================
-// 🚀 评论区/私信语音提取模块 (雷达+捞针 终极融合强显版)
+// 🚀 终极核武：AudioUnit PCM 物理级截获引擎
 // ==========================================
+#import <AudioToolbox/AudioToolbox.h>
+#import <substrate.h>
 
-static NSString *g_lastCapturedAudioPath = nil;
-static BOOL g_isLastCapturedNetwork = NO; 
-static NSString *g_lastCapturedDataPath = nil;
+// 分配 10MB 的内存，用于存放 PCM 数据（大约能录 1 分钟）
+#define MAX_PCM_SIZE (1024 * 1024 * 10) 
+static uint8_t *g_pcmBuffer = NULL;
+static size_t g_pcmOffset = 0;
+static BOOL g_isRecordingPCM = NO;
 
-// ================= 1. 精准雷达 (专抓私信与明文播放) =================
-static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
-    if (!URL) return;
-    NSString *urlStr = URL.absoluteString;
-    NSString *localPath = URL.path; 
-    NSString *lowerStr = urlStr.lowercaseString;
+// 保存原始的 AudioUnitRender 函数指针
+static OSStatus (*orig_AudioUnitRender)(AudioUnit inUnit,
+                                        AudioUnitRenderActionFlags *ioActionFlags,
+                                        const AudioTimeStamp *inTimeStamp,
+                                        UInt32 inOutputBusNumber,
+                                        UInt32 inNumberFrames,
+                                        AudioBufferList *ioData);
+
+// 💥 我们自己的拦截器：每一帧音频输出前，都会经过这里！
+static OSStatus replaced_AudioUnitRender(AudioUnit inUnit,
+                                         AudioUnitRenderActionFlags *ioActionFlags,
+                                         const AudioTimeStamp *inTimeStamp,
+                                         UInt32 inOutputBusNumber,
+                                         UInt32 inNumberFrames,
+                                         AudioBufferList *ioData) {
     
-    // 🛑 核心黑名单：屏蔽自己生成的变声文件
-    if ([lowerStr containsString:@"temp_trimmed"] || [lowerStr containsString:@"dyyy_"] || [lowerStr containsString:@"record"] || [lowerStr containsString:@"upload"] || [lowerStr containsString:@"draft"]) {
-        return;
-    }
+    // 1. 先让原始引擎去渲染出真实的 PCM 声音
+    OSStatus status = orig_AudioUnitRender(inUnit, ioActionFlags, inTimeStamp, inOutputBusNumber, inNumberFrames, ioData);
     
-    // 过滤掉静态图片
-    if ([lowerStr hasSuffix:@".jpg"] || [lowerStr hasSuffix:@".png"] || [lowerStr hasSuffix:@".webp"]) return;
-
-    if ([lowerStr hasPrefix:@"http"]) {
-        // 放宽网络拦截条件，哪怕抖音伪装成 mp4，只要带 cache 或 audio 就抓
-        if ([lowerStr containsString:@"audio"] || [lowerStr containsString:@"cache"] || [lowerStr containsString:@"comment"]) {
-            g_lastCapturedAudioPath = urlStr;
-            g_isLastCapturedNetwork = YES;
-        }
-    } else if (localPath && ([lowerStr containsString:@"cache"] || [lowerStr containsString:@"attachment"] || [lowerStr containsString:@"comment"] || [lowerStr containsString:@"im_audio"])) {
-        g_lastCapturedAudioPath = localPath; 
-        g_isLastCapturedNetwork = NO;
-    }
-}
-
-%hook TTVideoEngine
-- (void)setDirectPlayURL:(NSString *)URLString {
-    if (URLString) DYYY_CheckAndCaptureAudio([NSURL URLWithString:URLString], @"TTEngine_Net");
-    %orig;
-}
-- (void)setLocalURL:(NSString *)URLString {
-    if (URLString) DYYY_CheckAndCaptureAudio([NSURL fileURLWithPath:URLString], @"TTEngine_Loc");
-    %orig;
-}
-%end
-
-%hook AWEAudioPlayer
-- (instancetype)initWithURL:(NSURL *)URL {
-    DYYY_CheckAndCaptureAudio(URL, @"AWEAudio");
-    return %orig;
-}
-%end
-
-%hook AVPlayerItem
-- (instancetype)initWithURL:(NSURL *)URL {
-    DYYY_CheckAndCaptureAudio(URL, @"AVPlayerItem");
-    return %orig;
-}
-+ (instancetype)playerItemWithURL:(NSURL *)URL {
-    DYYY_CheckAndCaptureAudio(URL, @"AVPlayerItem");
-    return %orig;
-}
-%end
-
-%hook AVAudioPlayer
-- (id)initWithContentsOfURL:(NSURL *)url error:(NSError **)outError {
-    DYYY_CheckAndCaptureAudio(url, @"AVAudioPlayer");
-    return %orig;
-}
-%end
-
-
-// ================= 2. 暴力捞针 (专治评论区各种不服) =================
-static NSString *DYYY_FindLatestMediaCache() {
-    NSFileManager *fm = [NSFileManager defaultManager];
-    NSString *cacheDir = [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES) firstObject];
-    NSArray *searchPaths = @[
-        [cacheDir stringByAppendingPathComponent:@"AWEAudioCache"],
-        [cacheDir stringByAppendingPathComponent:@"aweme_audio_cache"],
-        [cacheDir stringByAppendingPathComponent:@"VideoCache"],
-        NSTemporaryDirectory()
-    ];
-    
-    NSString *latestFile = nil;
-    NSDate *latestDate = [NSDate distantPast];
-    
-    for (NSString *dir in searchPaths) {
-        if (![fm fileExistsAtPath:dir]) continue;
-        NSDirectoryEnumerator *enumerator = [fm enumeratorAtURL:[NSURL fileURLWithPath:dir] includingPropertiesForKeys:@[@"NSURLModificationDateKey", @"NSURLFileSizeKey"] options:NSDirectoryEnumerationSkipsHiddenFiles errorHandler:nil];
-        for (NSURL *fileURL in enumerator) {
-            NSString *fullPath = fileURL.path;
-            if ([fullPath containsString:@"dyyy"] || [fullPath containsString:@"sqlite"] || [fullPath hasSuffix:@".log"] || [fullPath hasSuffix:@".jpg"]) continue;
-            
-            NSDate *modDate; [fileURL getResourceValue:&modDate forKey:@"NSURLModificationDateKey" error:nil];
-            NSNumber *fileSize; [fileURL getResourceValue:&fileSize forKey:@"NSURLFileSizeKey" error:nil];
-            
-            if (fileSize.integerValue > 2000 && fileSize.integerValue < 5000000) { // 放宽到 5MB
-                if ([modDate compare:latestDate] == NSOrderedDescending) {
-                    latestDate = modDate;
-                    latestFile = fullPath;
+    // 2. 如果状态正常，且我们开启了“录音开关”，且有数据
+    if (status == noErr && g_isRecordingPCM && ioData != NULL) {
+        // 遍历所有的音频缓冲区 (通常是左声道/右声道，或者交错双声道)
+        for (UInt32 i = 0; i < ioData->mNumberBuffers; i++) {
+            AudioBuffer buffer = ioData->mBuffers[i];
+            if (buffer.mData != NULL && buffer.mDataByteSize > 0) {
+                // 确保不要内存溢出
+                size_t bytesToCopy = buffer.mDataByteSize;
+                if (g_pcmOffset + bytesToCopy < MAX_PCM_SIZE) {
+                    // 直接把 PCM 数据拷贝到我们的全局大缸里！这就是最纯粹的声音！
+                    memcpy(g_pcmBuffer + g_pcmOffset, buffer.mData, bytesToCopy);
+                    g_pcmOffset += bytesToCopy;
                 }
             }
         }
     }
-    if (latestFile && [[NSDate date] timeIntervalSinceDate:latestDate] < 10.0) return latestFile;
-    return nil;
+    return status;
 }
 
+// 帮裸 PCM 数据穿上 WAV 的衣服，否则系统播放器不认识它
+static NSData *DYYY_WrapPCMToWAV(void *pcmData, size_t dataSize) {
+    int sampleRate = 44100; // 默认 44.1kHz
+    int channels = 2;       // 默认立体声
+    int bitsPerSample = 32; // iOS 底层混音器通常输出 32-bit Float
+    int byteRate = sampleRate * channels * (bitsPerSample / 8);
+    int blockAlign = channels * (bitsPerSample / 8);
+
+    NSMutableData *wavData = [[NSMutableData alloc] init];
+    [wavData appendBytes:"RIFF" length:4];
+    int chunkSize = 36 + (int)dataSize;
+    [wavData appendBytes:&chunkSize length:4];
+    [wavData appendBytes:"WAVE" length:4];
+    [wavData appendBytes:"fmt " length:4];
+    int subchunk1Size = 16;
+    [wavData appendBytes:&subchunk1Size length:4];
+    short audioFormat = 3; // 3 代表 32-bit Float
+    [wavData appendBytes:&audioFormat length:2];
+    [wavData appendBytes:&channels length:2];
+    [wavData appendBytes:&sampleRate length:4];
+    [wavData appendBytes:&byteRate length:4];
+    [wavData appendBytes:&blockAlign length:2];
+    [wavData appendBytes:&bitsPerSample length:2];
+    [wavData appendBytes:"data" length:4];
+    [wavData appendBytes:&dataSize length:4];
+    
+    // 塞入我们在底层抓到的灵魂
+    [wavData appendBytes:pcmData length:dataSize];
+    return wavData;
+}
+
+
 // ==========================================
-// 📱 摇一摇触发 (修复 Block 内部 goto 跨域报错版)
+// 📱 摇一摇开关：物理录音机 (Start / Stop)
 // ==========================================
 %hook UIWindow
 - (void)motionEnded:(UIEventSubtype)motion withEvent:(UIEvent *)event {
     if (motion == UIEventSubtypeMotionShake) {
         
-        NSString *targetDir = [[DYYYAudioManager sharedManager] voiceDirectory];
-        // 强制披上 .m4a 外衣，保证音频助手列表可见
-        NSString *fileName = [NSString stringWithFormat:@"提取语音_%ld.m4a", (long)[[NSDate date] timeIntervalSince1970]];
-        NSString *targetPath = [targetDir stringByAppendingPathComponent:fileName];
-        
-        // 🌟 场景 1：雷达抓到了本地文件 (私信)
-        if (!g_isLastCapturedNetwork && g_lastCapturedAudioPath && [[NSFileManager defaultManager] fileExistsAtPath:g_lastCapturedAudioPath]) {
-            NSError *error = nil;
-            [[NSFileManager defaultManager] copyItemAtPath:g_lastCapturedAudioPath toPath:targetPath error:&error];
+        // 如果当前没有录音，则【开始录制】
+        if (!g_isRecordingPCM) {
+            g_pcmOffset = 0; // 清空旧数据
+            g_isRecordingPCM = YES;
             dispatch_async(dispatch_get_main_queue(), ^{
-                if (!error) {
-                    [DYYYUtils showToast:@"✅ 私信提取成功！快去助手查看"];
-                    g_lastCapturedAudioPath = nil;
-                } else {
-                    [DYYYUtils showToast:@"❌ 私信提取失败"];
-                }
+                [DYYYUtils showToast:@"🔴 已开启底层录音\n请点开评论语音，听完后再次摇一摇！"];
             });
-        }
-        // 🌟 场景 2：雷达抓到了网络文件 (评论区 HTTP)
-        else if (g_isLastCapturedNetwork && g_lastCapturedAudioPath) {
-            dispatch_async(dispatch_get_main_queue(), ^{ [DYYYUtils showToast:@"⏳ 正在下载网络语音..."]; });
-            NSString *downloadUrl = g_lastCapturedAudioPath; 
-            
-            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-                NSData *audioData = [NSData dataWithContentsOfURL:[NSURL URLWithString:downloadUrl]];
+        } 
+        // 如果正在录音，则【停止并保存】
+        else {
+            g_isRecordingPCM = NO;
+            if (g_pcmOffset > 0) {
+                // 给 PCM 数据加上 WAV 头
+                NSData *wavData = DYYY_WrapPCMToWAV(g_pcmBuffer, g_pcmOffset);
                 
-                if (audioData && [audioData writeToFile:targetPath atomically:YES]) {
+                NSString *targetDir = [[DYYYAudioManager sharedManager] voiceDirectory];
+                NSString *fileName = [NSString stringWithFormat:@"底层截获_%ld.wav", (long)[[NSDate date] timeIntervalSince1970]];
+                NSString *targetPath = [targetDir stringByAppendingPathComponent:fileName];
+                
+                if ([wavData writeToFile:targetPath atomically:YES]) {
                     dispatch_async(dispatch_get_main_queue(), ^{
-                        [DYYYUtils showToast:@"✅ 评论语音已下载至助手！"];
-                        g_lastCapturedAudioPath = nil;
+                        [DYYYUtils showToast:@"✅ 物理截获成功！底层声音已存入助手！"];
                     });
                 } else {
-                    // ⚠️ 网络下载失败，在当前异步线程直接执行物理捞针兜底，拒绝 goto！
-                    NSString *cachePath = DYYY_FindLatestMediaCache();
-                    if (cachePath) {
-                        NSError *error = nil;
-                        [[NSFileManager defaultManager] copyItemAtPath:cachePath toPath:targetPath error:&error];
-                        dispatch_async(dispatch_get_main_queue(), ^{
-                            if (!error) [DYYYUtils showToast:@"✅ 底层缓存强制提取成功！(m4a)"];
-                            else [DYYYUtils showToast:@"❌ 底层提取失败"];
-                        });
-                    } else {
-                        dispatch_async(dispatch_get_main_queue(), ^{
-                            [DYYYUtils showToast:@"⚠️ 网络异常，底层也未抓到语音\n请重新听一遍再摇"];
-                        });
-                    }
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [DYYYUtils showToast:@"❌ 写入文件失败"];
+                    });
                 }
-            });
-        }
-        // 🌟 场景 3：雷达完全没反应，直接启动底层数据流扫描
-        else {
-            NSString *cachePath = DYYY_FindLatestMediaCache();
-            if (cachePath) {
-                NSError *error = nil;
-                [[NSFileManager defaultManager] copyItemAtPath:cachePath toPath:targetPath error:&error];
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    if (!error) [DYYYUtils showToast:@"✅ 底层缓存强制提取成功！(m4a)"];
-                    else [DYYYUtils showToast:@"❌ 底层提取失败"];
-                });
             } else {
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    [DYYYUtils showToast:@"⚠️ 未捕捉到语音\n请点开播放出声后再立刻摇一摇"];
+                    [DYYYUtils showToast:@"⚠️ 未捕捉到任何声音\n(可能静音或没有播放)"];
                 });
             }
         }
@@ -1721,6 +1664,18 @@ static NSString *DYYY_FindLatestMediaCache() {
     %orig;
 }
 %end
+
+// ==========================================
+// 🚀 初始化 Hook 引擎
+// ==========================================
+%ctor {
+    // 插件加载时，分配全局内存缸
+    g_pcmBuffer = (uint8_t *)malloc(MAX_PCM_SIZE);
+    
+    // 暴力替换系统的 AudioUnitRender 函数！
+    MSHookFunction((void *)AudioUnitRender, (void *)replaced_AudioUnitRender, (void **)&orig_AudioUnitRender);
+}
+
 
 
 
