@@ -1657,7 +1657,8 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 
 // 📝 封装一个简单的写文件日志函数
 static void DYYY_LogToFile(NSString *content) {
-    NSString *logPath = @"/var/mobile/Documents/DYYY_Debug.log";
+    NSString *logPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"DYYY_Debug.log"];
+    
     NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
     [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
     NSString *timestamp = [formatter stringFromDate:[NSDate date]];
