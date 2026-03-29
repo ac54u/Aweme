@@ -1650,72 +1650,39 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 %end
 
 // ==========================================
-// 🎙️ 私信实时变声器 (文件日志调试版)
+// 🎙️ 私信变声器 - 深度类名雷达版
 // ==========================================
 #import "DYYYVoiceChanger.h"
 #import "DYYYUtils.h"
 
-// 📝 封装一个简单的写文件日志函数
 static void DYYY_LogToFile(NSString *content) {
     NSString *logPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"DYYY_Debug.log"];
-    
     NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
     [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
     NSString *timestamp = [formatter stringFromDate:[NSDate date]];
     NSString *finalContent = [NSString stringWithFormat:@"[%@] %@\n", timestamp, content];
-    
     NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:logPath];
-    if (!handle) {
-        [finalContent writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    } else {
-        [handle seekToEndOfFile];
-        [handle writeData:[finalContent dataUsingEncoding:NSUTF8StringEncoding]];
-        [handle closeFile];
-    }
+    if (!handle) { [finalContent writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil]; }
+    else { [handle seekToEndOfFile]; [handle writeData:[finalContent dataUsingEncoding:NSUTF8StringEncoding]]; [handle closeFile]; }
 }
 
-@interface AWEIMChatViewController : UIViewController
-@end
-
-@interface AWEIMMessageSender : NSObject
-@end
-
-%ctor {
-    DYYY_LogToFile(@"🚀 插件加载成功！已开启监控...");
-}
-
-%hook AWEIMChatViewController
-- (void)viewWillAppear:(BOOL)animated {
+// 🎯 我们 Hook 这里的基类，但换一个方法名，完美避开 redefinition 报错
+%hook UIViewController
+- (void)viewDidAppear:(BOOL)animated {
     %orig;
-    DYYY_LogToFile([NSString stringWithFormat:@"📡 进入聊天窗口: %@", NSStringFromClass([(id)self class])]);
+    NSString *className = NSStringFromClass([self class]);
+    // 只有当我们进入和 IM、Chat、Message 相关的页面时才记录，避免日志太乱
+    if ([className containsString:@"IM"] || [className containsString:@"Chat"] || [className containsString:@"Message"]) {
+        DYYY_LogToFile([NSString stringWithFormat:@"📡 [雷达] 当前页面类名: %@", className]);
+    }
 }
 %end
 
-%hook AWEIMMessageSender
-- (void)sendMessage:(id)message toConversation:(id)conversation completion:(id)completion {
-    DYYY_LogToFile(@"🎯 触发 sendMessage 方法");
-    
-    NSInteger voiceType = [[NSUserDefaults standardUserDefaults] integerForKey:@"DYYYVoiceChangerType"];
-    
-    if (voiceType > 0 && [message respondsToSelector:@selector(audioPath)]) {
-        NSString *filePath = [message performSelector:@selector(audioPath)];
-        DYYY_LogToFile([NSString stringWithFormat:@"🎤 捕获语音文件: %@", filePath]);
-        
-        float pitch = (voiceType == 1) ? 1000.0 : -800.0;
-        
-        [DYYYVoiceChanger processAudioAtPath:filePath withPitch:pitch completion:^(NSString *outPath, NSError *error) {
-            if (outPath && !error) {
-                DYYY_LogToFile([NSString stringWithFormat:@"✅ 变声处理成功: %@", outPath]);
-                @try { [message setValue:outPath forKey:@"audioPath"]; } 
-                @catch (NSException *e) { DYYY_LogToFile([NSString stringWithFormat:@"❌ 替换路径失败: %@", e.reason]); }
-            } else {
-                DYYY_LogToFile([NSString stringWithFormat:@"❌ 变声引擎报错: %@", error.localizedDescription]);
-            }
-            %orig(message, conversation, completion);
-        }];
-        return;
-    }
-    %orig;
+// 🎯 拦截通用的消息包装方法
+%hook AWEIMMessage
++ (id)messageWithAudioPath:(NSString *)path duration:(NSTimeInterval)duration {
+    DYYY_LogToFile([NSString stringWithFormat:@"🎯 [命中] 发现音频消息创建！路径: %@", path]);
+    return %orig;
 }
 %end
 
