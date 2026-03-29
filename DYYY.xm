@@ -23,8 +23,6 @@
 #import "DYYYToast.h"
 #import "DYYYUtils.h"
 
-#import "DYYYVoiceChanger.h"
-#import "DYYYUtils.h" // 用来弹 Toast 提示
 
 static CGFloat gStartY = 0.0;
 static CGFloat gStartVal = 0.0;
@@ -1727,52 +1725,11 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 
 %end
 
-
-#import "DYYYVoiceChanger.h"
-
-// ==========================================
-// 🎙️ 私信实时变声器 (拦截音频发送)
-// ==========================================
-
-// 抖音 IM 底层负责发送消息的管理类 (不同版本可能叫 AWEIMMessageDataManager)
-%hook AWEIMMessageDataManager
-
-// 拦截发送音频文件的方法
-- (void)sendAudioMessageWithFilePath:(NSString *)filePath 
-                            duration:(NSTimeInterval)duration 
-                          completion:(id)completionBlock {
-    
-    // 1. 读取我们设置里的变声选项 (0=正常, 1=萝莉, 2=大叔)
-    NSInteger voiceType = [[NSUserDefaults standardUserDefaults] integerForKey:@"DYYYVoiceChangerType"];
-    
-    if (voiceType == 0) {
-        // 没开变声，直接走官方原有逻辑发送
-        %orig(filePath, duration, completionBlock);
-        return;
-    }
-    
-    // 2. 确定变声音调参数
-    float pitch = 0.0;
-    if (voiceType == 1) pitch = 1000.0; // 萝莉音 (升高 10 个半音)
-    if (voiceType == 2) pitch = -800.0; // 大叔音 (降低 8 个半音)
-    
-    // 3. 开始魔改音频！
-    [DYYYVoiceChanger processAudioAtPath:filePath withPitch:pitch completion:^(NSString *outputPath, NSError *error) {
-        if (outputPath && !error) {
-            // ✅ 变声成功！拿着新的假文件路径，调用原有的发送方法骗过抖音
-            %orig(outputPath, duration, completionBlock);
-        } else {
-            // ❌ 万一处理失败了，为了不耽误聊天，发送原语音
-            %orig(filePath, duration, completionBlock);
-        }
-    }];
-}
-
-%end
-
 // ==========================================
 // 🎙️ 私信实时变声器 (带调试雷达版)
 // ==========================================
+#import "DYYYVoiceChanger.h"
+#import "DYYYUtils.h"
 
 %hook AWEIMMessageDataManager
 
@@ -1783,33 +1740,30 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
     // 读取变声选项
     NSInteger voiceType = [[NSUserDefaults standardUserDefaults] integerForKey:@"DYYYVoiceChangerType"];
     
-    // 【雷达 1】：测试有没有成功抓到发送动作
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [DYYYUtils showToast:[NSString stringWithFormat:@"🎤 拦截成功！当前模式: %ld", (long)voiceType]];
-    });
-    
+    // 如果是 0 (正常)，直接发送原声
     if (voiceType == 0) {
         %orig(filePath, duration, completionBlock);
         return;
     }
     
+    // 雷达 1：拦截成功
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [DYYYUtils showToast:[NSString stringWithFormat:@"🎤 拦截成功！模式: %ld", (long)voiceType]];
+    });
+    
     float pitch = 0.0;
     if (voiceType == 1) pitch = 1000.0; // 萝莉音
     if (voiceType == 2) pitch = -800.0; // 大叔音
     
-    // 【雷达 2】：提示开始变声
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [DYYYUtils showToast:@"⚙️ 引擎正在处理变声..."];
-    });
-    
+    // 开始变声
     [DYYYVoiceChanger processAudioAtPath:filePath withPitch:pitch completion:^(NSString *outputPath, NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (outputPath && !error) {
-                // 【雷达 3】：变声大成功
+                // 雷达 2：变声大成功
                 [DYYYUtils showToast:@"✅ 变声成功！正在发送假语音"];
                 %orig(outputPath, duration, completionBlock);
             } else {
-                // 【雷达 4】：处理报错了
+                // 雷达 3：处理报错
                 [DYYYUtils showToast:[NSString stringWithFormat:@"❌ 变声失败: %@", error.localizedDescription]];
                 %orig(filePath, duration, completionBlock);
             }
