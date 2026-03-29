@@ -1726,51 +1726,63 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 %end
 
 // ==========================================
-// 🎙️ 私信实时变声器 (带调试雷达版)
+// 🎙️ 私信实时变声器 (撒大网版)
 // ==========================================
 #import "DYYYVoiceChanger.h"
 #import "DYYYUtils.h"
 
+// 🎯 目标 1：老版本或某些特定数据管家
 %hook AWEIMMessageDataManager
-
-- (void)sendAudioMessageWithFilePath:(NSString *)filePath 
-                            duration:(NSTimeInterval)duration 
-                          completion:(id)completionBlock {
-    
-    // 读取变声选项
+- (void)sendAudioMessageWithFilePath:(NSString *)filePath duration:(NSTimeInterval)duration completion:(id)completionBlock {
     NSInteger voiceType = [[NSUserDefaults standardUserDefaults] integerForKey:@"DYYYVoiceChangerType"];
+    dispatch_async(dispatch_get_main_queue(), ^{ [DYYYUtils showToast:@"🎯 命中 1: DataManager"]; });
     
-    // 如果是 0 (正常)，直接发送原声
-    if (voiceType == 0) {
-        %orig(filePath, duration, completionBlock);
-        return;
-    }
+    if (voiceType == 0) { %orig; return; }
     
-    // 雷达 1：拦截成功
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [DYYYUtils showToast:[NSString stringWithFormat:@"🎤 拦截成功！模式: %ld", (long)voiceType]];
-    });
-    
-    float pitch = 0.0;
-    if (voiceType == 1) pitch = 1000.0; // 萝莉音
-    if (voiceType == 2) pitch = -800.0; // 大叔音
-    
-    // 开始变声
-    [DYYYVoiceChanger processAudioAtPath:filePath withPitch:pitch completion:^(NSString *outputPath, NSError *error) {
+    float pitch = (voiceType == 1) ? 1000.0 : -800.0;
+    [DYYYVoiceChanger processAudioAtPath:filePath withPitch:pitch completion:^(NSString *outPath, NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (outputPath && !error) {
-                // 雷达 2：变声大成功
-                [DYYYUtils showToast:@"✅ 变声成功！正在发送假语音"];
-                %orig(outputPath, duration, completionBlock);
-            } else {
-                // 雷达 3：处理报错
-                [DYYYUtils showToast:[NSString stringWithFormat:@"❌ 变声失败: %@", error.localizedDescription]];
-                %orig(filePath, duration, completionBlock);
-            }
+            if (outPath && !error) { %orig(outPath, duration, completionBlock); }
+            else { %orig(filePath, duration, completionBlock); }
+        });
+    }];
+}
+%end
+
+// 🎯 目标 2 & 3：新版本最喜欢用的 ViewModel 视图模型
+%hook AWEIMChatViewModel
+
+// 变种 A
+- (void)sendAudioWithFilePath:(NSString *)filePath duration:(NSTimeInterval)duration {
+    NSInteger voiceType = [[NSUserDefaults standardUserDefaults] integerForKey:@"DYYYVoiceChangerType"];
+    dispatch_async(dispatch_get_main_queue(), ^{ [DYYYUtils showToast:@"🎯 命中 2: ViewModel_Long"]; });
+    
+    if (voiceType == 0) { %orig; return; }
+    
+    float pitch = (voiceType == 1) ? 1000.0 : -800.0;
+    [DYYYVoiceChanger processAudioAtPath:filePath withPitch:pitch completion:^(NSString *outPath, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (outPath && !error) { %orig(outPath, duration); }
+            else { %orig(filePath, duration); }
         });
     }];
 }
 
+// 变种 B
+- (void)sendAudio:(NSString *)filePath duration:(NSTimeInterval)duration {
+    NSInteger voiceType = [[NSUserDefaults standardUserDefaults] integerForKey:@"DYYYVoiceChangerType"];
+    dispatch_async(dispatch_get_main_queue(), ^{ [DYYYUtils showToast:@"🎯 命中 3: ViewModel_Short"]; });
+    
+    if (voiceType == 0) { %orig; return; }
+    
+    float pitch = (voiceType == 1) ? 1000.0 : -800.0;
+    [DYYYVoiceChanger processAudioAtPath:filePath withPitch:pitch completion:^(NSString *outPath, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (outPath && !error) { %orig(outPath, duration); }
+            else { %orig(filePath, duration); }
+        });
+    }];
+}
 %end
 
 // 屏蔽版本更新
