@@ -457,6 +457,11 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
 }
 
 - (NSString *)displayValueForKey:(NSString *)key value:(id)value {
+    if ([key isEqualToString:@"DYYYDefaultSpeed"] || [key isEqualToString:@"DYYYLongPressSpeed"]) {
+        float speedValue = [value floatValue];
+        return [NSString stringWithFormat:@"%.2f", speedValue];
+    } else if ([key isEqualToString:@"DYYYLiveQuality"]) {
+        return value ?: @"自动";
     } else if ([key isEqualToString:@"DYYYVoiceChangerType"]) {
         NSInteger val = [value integerValue];
         if (val == 1) return @"🎀 夹子/萝莉音";
@@ -467,6 +472,7 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
         return @"正常原声";
     }
     return [NSString stringWithFormat:@"%@", value];
+}
 
 - (id)defaultValueForKey:(NSString *)key {
     if ([key isEqualToString:@"DYYYDefaultSpeed"] || [key isEqualToString:@"DYYYLongPressSpeed"]) {
