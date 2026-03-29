@@ -1540,11 +1540,8 @@
 // =======================================
 // ==========================================
 // ==========================================
-
-
 // ==========================================
-// ==========================================
-// 🚀 终极核武：全屏穿透悬浮窗 + VAD声控掐头去尾
+// 🚀 终极核武：全屏穿透悬浮窗 + VAD声控掐头去尾 (完美无错版)
 // ==========================================
 #import <UIKit/UIKit.h>
 #import <ReplayKit/ReplayKit.h>
@@ -1575,7 +1572,6 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
     if (!asbd) return 0.0;
     
     float maxAmplitude = 0.0;
-    // iOS ReplayKit 通常输出 32-bit Float 或 16-bit Int
     if (asbd->mFormatFlags & kAudioFormatFlagIsFloat) {
         float *floatData = (float *)dataPointer;
         size_t count = totalLength / sizeof(float);
@@ -1663,7 +1659,7 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
     return self;
 }
 
-// 事件穿透魔法
+// 事件穿透魔法：只拦截小圆点区域
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     CGRect hitArea = CGRectInset(_floatButton.frame, -20, -20);
     if (CGRectContainsPoint(hitArea, point)) return _floatButton; 
@@ -1672,7 +1668,7 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
 
 - (void)show { self.hidden = NO; }
 
-// 拖拽与智能吸附边界
+// 拖拽与智能边缘吸附
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     CGPoint translation = [pan translationInView:self];
     _floatButton.center = CGPointMake(_floatButton.center.x + translation.x, _floatButton.center.y + translation.y);
@@ -1694,7 +1690,7 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
     }
 }
 
-// UI 状态机
+// UI 状态反馈
 - (void)switchToWaitingColor {
     CABasicAnimation *pulse = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
     pulse.duration = 0.6;
@@ -1703,12 +1699,10 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
     pulse.autoreverses = YES;
     pulse.repeatCount = HUGE_VALF;
     [self.gradientView.layer addAnimation:pulse forKey:@"pulsing"];
-    // 等待声音输入时，边框变黄
     self.gradientView.layer.borderColor = [UIColor systemYellowColor].CGColor; 
 }
 
 - (void)switchToActiveRecordingColor {
-    // 捕获到声音时，边框爆红
     self.gradientView.layer.borderColor = [UIColor systemRedColor].CGColor;
     [DYYYUtils showToast:@"🎙️ 已捕捉到声音，正在录制..."];
 }
@@ -1729,7 +1723,6 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
         [self switchToWaitingColor];
         [DYYYUtils showToast:@"⏳ 监听中... 请点开要提取的语音"];
         
-        // 先写入一个临时沙盒路径
         g_tempAudioPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"dyyy_temp_record.m4a"];
         [[NSFileManager defaultManager] removeItemAtPath:g_tempAudioPath error:nil];
         
@@ -1759,26 +1752,22 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
         [recorder startCaptureWithHandler:^(CMSampleBufferRef sampleBuffer, RPSampleBufferType bufferType, NSError *error) {
             if (bufferType == RPSampleBufferTypeAudioApp) {
                 
-                // 计算当前数据流的声音大小
                 float amplitude = DYYY_GetBufferAmplitude(sampleBuffer);
                 
-                // 🔊 掐头：只有音量大于0.005（过滤纯数字静音），才判定为开始发声！
+                // 🔊 掐头：音量大于 0.005 才判定为开始发声
                 if (amplitude > 0.005) {
                     if (!g_firstSoundDetected) {
                         g_firstSoundDetected = YES;
                         g_firstSoundTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
-                        // 从有声音的这一帧才开始写入！完美掐掉开头空白！
                         [g_assetWriter startSessionAtSourceTime:g_firstSoundTime];
                         
                         dispatch_async(dispatch_get_main_queue(), ^{
                             [[DYYYRecordWindow sharedWindow] switchToActiveRecordingColor];
                         });
                     }
-                    // 不断刷新最后一次有声音的时间
                     g_lastSoundTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
                 }
                 
-                // 只要开始发声了，就把后续的正常停顿也写进去
                 if (g_firstSoundDetected && g_audioInput.isReadyForMoreMediaData) {
                     [g_audioInput appendSampleBuffer:sampleBuffer];
                 }
@@ -1795,15 +1784,12 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
                 [g_audioInput markAsFinished];
                 [g_assetWriter finishWritingWithCompletionHandler:^{
                     
-                    // ✂️ 计算去尾时间长度：最后一次发声时间 - 第一次发声时间
                     CMTime duration = CMTimeSubtract(g_lastSoundTime, g_firstSoundTime);
-                    // 加上 0.3 秒的防生硬断音尾巴
+                    // 加上 0.3 秒的防切断尾音保护
                     duration = CMTimeAdd(duration, CMTimeMake(300, 1000));
                     
-                    // 启动系统级剪辑师进行裁切
-                    // 启动系统级剪辑师进行裁切
                     AVAsset *asset = [AVAsset assetWithURL:[NSURL fileURLWithPath:g_tempAudioPath]];
-                    // ⚠️ 修复关键字冲突：把变量名从 export 改成 exportSession
+                    // ⚠️ 修复了 C++ 关键字冲突
                     AVAssetExportSession *exportSession = [[AVAssetExportSession alloc] initWithAsset:asset presetName:AVAssetExportPresetAppleM4A];
                     
                     NSString *targetDir = [[DYYYAudioManager sharedManager] voiceDirectory];
@@ -1815,7 +1801,6 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
                     exportSession.timeRange = CMTimeRangeMake(kCMTimeZero, duration);
                     
                     [exportSession exportAsynchronouslyWithCompletionHandler:^{
-                        // 清理临时文件
                         [[NSFileManager defaultManager] removeItemAtPath:g_tempAudioPath error:nil];
                         
                         dispatch_async(dispatch_get_main_queue(), ^{
@@ -1827,12 +1812,26 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
                             g_assetWriter = nil;
                             g_audioInput = nil;
                         });
-                    }
-         }];
-    }
-}
-@end
+                    }];
+                }];
+            } else {
+                [g_assetWriter cancelWriting];
+                [[NSFileManager defaultManager] removeItemAtPath:g_tempAudioPath error:nil];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [DYYYUtils showToast:@"⚠️ 未捕捉到任何声音"];
+                    g_assetWriter = nil;
+                    g_audioInput = nil;
+                });
+            }
+        }]; // 第一层闭合
+    } // 第二层闭合
+} // 第三层闭合
 
+@end // 彻底结束类的实现
+
+// ==========================================
+// 🚀 插件加载时自动显示悬浮窗 (必须完全独立在外层)
+// ==========================================
 %ctor {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         [[DYYYRecordWindow sharedWindow] show];
