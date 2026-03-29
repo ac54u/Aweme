@@ -27,7 +27,7 @@
         [player scheduleFile:inputFile atTime:nil completionHandler:nil];
         
         // 开启离线渲染模式 (超高速处理，不播放出声音)
-        [engine setUnbufferedManualRenderingMode:AVAudioEngineManualRenderingModeOffline format:inputFile.processingFormat maximumFrameCount:4096 error:&error];
+        [engine enableManualRenderingMode:AVAudioEngineManualRenderingModeOffline format:inputFile.processingFormat maximumFrameCount:4096 error:&error];
         [engine startAndReturnError:&error];
         [player play];
         
