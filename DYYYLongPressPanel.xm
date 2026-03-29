@@ -1508,7 +1508,7 @@
 }
 %end
 
-// 隐藏评论分享功能
+// 隐藏评论分享功能~ 
 %hook AWEIMCommentShareUserHorizontalCollectionViewCell
 - (void)layoutSubviews {
     %orig;
