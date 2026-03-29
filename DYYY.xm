@@ -1650,134 +1650,48 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 %end
 
 // ==========================================
-// 💬 私信增强：上帝视角 (已读不回 & 消息防撤回)
-// ==========================================
-
-// ------------------------------------------
-// 核心一：已读不回 (拦截底层已读包发送)
-// ------------------------------------------
-%hook TIMConversation
-
-- (void)markAllMessagesAsRead:(id)arg1 {
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYNoReadReceipt"]) {
-        // 🛑 霸道拦截：只要开关打开，绝对不向服务器发送已读同步包
-        return;
-    }
-    %orig;
-}
-
-%end
-
-%hook AWEIMConversation
-
-- (void)markAsRead {
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYNoReadReceipt"]) {
-        return;
-    }
-    %orig;
-}
-
-%end
-
-
-// ------------------------------------------
-// 核心二：消息防撤回 (拦截底层撤回状态变更)
-// ------------------------------------------
-%hook AWEIMMessage
-
-// 拦截系统修改消息状态
-- (void)setIsRecalled:(BOOL)arg1 {
-    if (arg1 && [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYAntiRecall"]) {
-        // 🛡️ 防御触发：当对方撤回，系统试图把这气泡设为“已撤回”时，直接拒收指令！
-        // （你可以顺手通过 Runtime 往气泡的 content 里塞个 "[对方试图撤回]" 的后缀，
-        // 但为了 100% 防崩溃，直接 return 保护原消息是最稳妥的）
-        return; 
-    }
-    %orig;
-}
-
-// 欺骗 UI 渲染层
-- (BOOL)isRecalled {
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYAntiRecall"]) {
-        return NO; // 永远告诉系统：这条消息没有被撤回，给我正常显示！
-    }
-    return %orig;
-}
-
-%end
-
-// 双重保险：拦截更底层的 TIM 模型
-%hook TIMMessage
-
-- (void)setIsRecalled:(BOOL)arg1 {
-    if (arg1 && [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYAntiRecall"]) {
-        return;
-    }
-    %orig;
-}
-
-- (BOOL)isRecalled {
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYAntiRecall"]) {
-        return NO;
-    }
-    return %orig;
-}
-
-%end
-
-// ==========================================
-// 🎙️ 私信实时变声器 (日志捕捉 + 全能拦截版)
+// 🎙️ 私信实时变声器 (非冲突测试版)
 // ==========================================
 #import "DYYYVoiceChanger.h"
 #import "DYYYUtils.h"
 
-// 🟢 验证点：只要插件加载了，控制台就会刷这条日志
+// 🟢 1. 构造函数：确认插件加载了没
 %ctor {
-    NSLog(@"[DYYY_LOG] 🚀 插件已初始化，正在潜入抖音...");
+    NSLog(@"[DYYY_LOG] 🚀 DYYY 插件初始化成功！系统正在监控私信模块...");
 }
 
-// 🟢 验证点：拦截所有 UIViewController 出现，看看插件进没进聊天窗口
-%hook UIViewController
+// 🟢 2. 专门 Hook 聊天控制器，避免和 UIViewController 冲突
+%hook AWEIMChatViewController
 - (void)viewWillAppear:(BOOL)animated {
     %orig;
-    NSString *className = NSStringFromClass([self class]);
-    if ([className containsString:@"IMChat"] || [className containsString:@"AWEIM"]) {
-        NSLog(@"[DYYY_LOG] 📡 当前进入了聊天相关页面: %@", className);
-        // 如果日志里出了这条，说明我们找对类了！
-    }
+    NSLog(@"[DYYY_LOG] 📡 确认进入聊天窗口类: %@", NSStringFromClass([self class]));
 }
 %end
 
-// 🟢 核心点：Hook 抖音最底层的消息发送中心 (这个类在近 10 个版本都没变过)
+// 🟢 3. 核心拦截：发送消息
 %hook AWEIMMessageSender
-
-- (void)sendMessage:(id)message 
-           toConversation:(id)conversation 
-               completion:(id)completion {
+- (void)sendMessage:(id)message toConversation:(id)conversation completion:(id)completion {
+    NSLog(@"[DYYY_LOG] 🎯 捕捉到发送动作");
     
-    NSLog(@"[DYYY_LOG] 🎯 捕捉到发送消息动作！");
+    // 获取变声类型
+    NSInteger voiceType = [[NSUserDefaults standardUserDefaults] integerForKey:@"DYYYVoiceChangerType"];
     
-    // 这里判断是不是语音消息
-    if ([message respondsToSelector:@selector(audioPath)]) {
+    // 如果 message 有音频路径，且开启了变声
+    if (voiceType > 0 && [message respondsToSelector:@selector(audioPath)]) {
         NSString *filePath = [message performSelector:@selector(audioPath)];
-        NSInteger voiceType = [[NSUserDefaults standardUserDefaults] integerForKey:@"DYYYVoiceChangerType"];
+        NSLog(@"[DYYY_LOG] 🎤 准备处理变声，路径: %@", filePath);
         
-        NSLog(@"[DYYY_LOG] 🎤 发现语音路径: %@", filePath);
-
-        if (voiceType > 0) {
-             float pitch = (voiceType == 1) ? 1000.0 : -800.0;
-             [DYYYVoiceChanger processAudioAtPath:filePath withPitch:pitch completion:^(NSString *outPath, NSError *error) {
-                 if (outPath && !error) {
-                     NSLog(@"[DYYY_LOG] ✅ 变声成功，路径已替换");
-                     // 这里需要根据具体的 message 类来动态修改其 audioPath 属性
-                     // 暂时先 orig 发送
-                     %orig;
-                 } else {
-                     %orig;
-                 }
-             }];
-             return;
-        }
+        float pitch = (voiceType == 1) ? 1000.0 : -800.0;
+        
+        [DYYYVoiceChanger processAudioAtPath:filePath withPitch:pitch completion:^(NSString *outPath, NSError *error) {
+            if (outPath && !error) {
+                NSLog(@"[DYYY_LOG] ✅ 变声转换成功: %@", outPath);
+                // 这里我们直接利用 KVC 强行把 message 里的路径换掉
+                [message setValue:outPath forKey:@"audioPath"];
+            }
+            %orig(message, conversation, completion);
+        }];
+        return;
     }
     %orig;
 }
