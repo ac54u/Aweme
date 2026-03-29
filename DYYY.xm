@@ -1650,8 +1650,10 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 %end
 
 // ==========================================
-// 🎙️ 私信变声器 - 录音动作深度捕获版
+// 🎙️ 私信变声器 - 底层探测与文件拦截版
 // ==========================================
+#import <Foundation/Foundation.h>
+#import <AVFoundation/AVFoundation.h>
 #import "DYYYVoiceChanger.h"
 #import "DYYYUtils.h"
 
@@ -1666,41 +1668,36 @@ static void DYYY_LogToFile(NSString *content) {
     else { [handle seekToEndOfFile]; [handle writeData:[finalContent dataUsingEncoding:NSUTF8StringEncoding]]; [handle closeFile]; }
 }
 
-// --- 🎯 目标 1: 监控 IESIM 录音代理 (这是最有可能的地方) ---
-%hook IESIMAudioRecorder
-- (void)stopRecording {
-    DYYY_LogToFile(@"🎤 [动作] IESIMAudioRecorder 执行 stopRecording");
+// --- 🎯 目标 1: 拦截系统底层录音机初始化 (抓取录音文件路径) ---
+%hook AVAudioRecorder
+- (instancetype)initWithURL:(NSURL *)url settings:(NSDictionary<NSString *, id> *)settings error:(NSError **)outError {
+    DYYY_LogToFile([NSString stringWithFormat:@"📂 [底层文件] AVAudioRecorder 准备写入文件: %@", url.path]);
+    return %orig(url, settings, outError);
+}
+
+- (BOOL)record {
+    DYYY_LogToFile(@"🎤 [底层动作] AVAudioRecorder 开始录音!");
+    return %orig;
+}
+
+- (void)stop {
+    DYYY_LogToFile(@"🛑 [底层动作] AVAudioRecorder 停止录音!");
     %orig;
 }
 %end
 
-// --- 🎯 目标 2: 监控 IESIM 输入框的所有疑似录音方法 ---
-%hook IESIMInputViewController
-
-// 变种 A: 原本的方法
-- (void)audioRecorderDidFinishRecording:(id)recorder filePath:(NSString *)filePath duration:(NSTimeInterval)duration {
-    DYYY_LogToFile(@"🎯 [命中A] audioRecorderDidFinishRecording 被触发");
-    %orig;
+// --- 🎯 目标 2: 监控 FileManager 的文件移动/复制 (防止音频录完被转移) ---
+%hook NSFileManager
+- (BOOL)copyItemAtPath:(NSString *)srcPath toPath:(NSString *)dstPath error:(NSError **)error {
+    if ([srcPath containsString:@".m4a"] || [srcPath containsString:@".wav"] || [srcPath containsString:@".caf"] || [srcPath containsString:@".aac"]) {
+        DYYY_LogToFile([NSString stringWithFormat:@"🚚 [文件转移] 音频 Copy: %@ -> %@", srcPath, dstPath]);
+    }
+    return %orig;
 }
 
-// 变种 B: 可能缺少 recorder 参数
-- (void)audioRecorderDidFinishRecordingWithFilePath:(NSString *)filePath duration:(NSTimeInterval)duration {
-    DYYY_LogToFile(@"🎯 [命中B] audioRecorderDidFinishRecordingWithFilePath 被触发");
-    %orig;
-}
-
-// 变种 C: 通用的完成回调
-- (void)recorderDidFinishRecording:(id)recorder {
-    DYYY_LogToFile(@"🎯 [命中C] recorderDidFinishRecording 被触发");
-    %orig;
-}
-%end
-
-// --- 🎯 目标 3: 监控音频文件生成 ---
-%hook NSData
-- (BOOL)writeToFile:(NSString *)path atomically:(BOOL)useAuxiliaryFile {
-    if ([path containsString:@".m4a"] || [path containsString:@".wav"]) {
-        DYYY_LogToFile([NSString stringWithFormat:@"💾 [文件] 正在写入音频文件: %@", path]);
+- (BOOL)moveItemAtPath:(NSString *)srcPath toPath:(NSString *)dstPath error:(NSError **)error {
+    if ([srcPath containsString:@".m4a"] || [srcPath containsString:@".wav"] || [srcPath containsString:@".caf"] || [srcPath containsString:@".aac"]) {
+        DYYY_LogToFile([NSString stringWithFormat:@"🚚 [文件转移] 音频 Move: %@ -> %@", srcPath, dstPath]);
     }
     return %orig;
 }
