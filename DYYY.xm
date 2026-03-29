@@ -1648,6 +1648,82 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 
 %end
 
+// ==========================================
+// 💬 私信增强：上帝视角 (已读不回 & 消息防撤回)
+// ==========================================
+
+// ------------------------------------------
+// 核心一：已读不回 (拦截底层已读包发送)
+// ------------------------------------------
+%hook TIMConversation
+
+- (void)markAllMessagesAsRead:(id)arg1 {
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYNoReadReceipt"]) {
+        // 🛑 霸道拦截：只要开关打开，绝对不向服务器发送已读同步包
+        return;
+    }
+    %orig;
+}
+
+%end
+
+%hook AWEIMConversation
+
+- (void)markAsRead {
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYNoReadReceipt"]) {
+        return;
+    }
+    %orig;
+}
+
+%end
+
+
+// ------------------------------------------
+// 核心二：消息防撤回 (拦截底层撤回状态变更)
+// ------------------------------------------
+%hook AWEIMMessage
+
+// 拦截系统修改消息状态
+- (void)setIsRecalled:(BOOL)arg1 {
+    if (arg1 && [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYAntiRecall"]) {
+        // 🛡️ 防御触发：当对方撤回，系统试图把这气泡设为“已撤回”时，直接拒收指令！
+        // （你可以顺手通过 Runtime 往气泡的 content 里塞个 "[对方试图撤回]" 的后缀，
+        // 但为了 100% 防崩溃，直接 return 保护原消息是最稳妥的）
+        return; 
+    }
+    %orig;
+}
+
+// 欺骗 UI 渲染层
+- (BOOL)isRecalled {
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYAntiRecall"]) {
+        return NO; // 永远告诉系统：这条消息没有被撤回，给我正常显示！
+    }
+    return %orig;
+}
+
+%end
+
+// 双重保险：拦截更底层的 TIM 模型
+%hook TIMMessage
+
+- (void)setIsRecalled:(BOOL)arg1 {
+    if (arg1 && [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYAntiRecall"]) {
+        return;
+    }
+    %orig;
+}
+
+- (BOOL)isRecalled {
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYAntiRecall"]) {
+        return NO;
+    }
+    return %orig;
+}
+
+%end
+
 // 屏蔽版本更新
 %hook AWEVersionUpdateManager
 

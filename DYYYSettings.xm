@@ -1946,6 +1946,17 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
             @"detail" : @"看主页、看视频不留访客记录",
             @"cellType" : @6,
             @"imageName" : @"ic_circlearrowin_outlined_20"}, // 闭眼图标，绝配隐身功能
+          @{@"identifier" : @"DYYYNoReadReceipt",
+            @"title" : @"私信已读不回",
+            @"detail" : @"查看对方消息不发送已读回执",
+            @"cellType" : @6,
+            @"imageName" : @"ic_circlearrowin_outlined_20"}, // 闭眼看消息
+
+          @{@"identifier" : @"DYYYAntiRecall",
+            @"title" : @"私信消息防撤回",
+            @"detail" : @"无视对方的撤回指令，永久保留",
+            @"cellType" : @6,
+            @"imageName" : @"ic_circlearrowin_outlined_20"}, // 盾牌图标，防御撤回
           @{@"identifier" : @"DYYYLongPressSaveCurrentImage",
             @"title" : @"长按保存当前图片",
             @"detail" : @"",
