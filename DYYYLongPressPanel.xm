@@ -1539,9 +1539,7 @@
 
 // =======================================
 // ==========================================
-// ==========================================
-// ==========================================
-// 🚀 终极核武：全屏穿透悬浮窗 + VAD声控掐头去尾 (完美无错版)
+// 🚀 终极核武：全屏穿透悬浮窗 + VAD声控掐头去尾 + 极速直通防越界 (完美最终版)
 // ==========================================
 #import <UIKit/UIKit.h>
 #import <ReplayKit/ReplayKit.h>
@@ -1784,13 +1782,21 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
                 [g_audioInput markAsFinished];
                 [g_assetWriter finishWritingWithCompletionHandler:^{
                     
-                    CMTime duration = CMTimeSubtract(g_lastSoundTime, g_firstSoundTime);
-                    // 加上 0.3 秒的防切断尾音保护
-                    duration = CMTimeAdd(duration, CMTimeMake(300, 1000));
-                    
                     AVAsset *asset = [AVAsset assetWithURL:[NSURL fileURLWithPath:g_tempAudioPath]];
-                    // ⚠️ 修复了 C++ 关键字冲突
-                    AVAssetExportSession *exportSession = [[AVAssetExportSession alloc] initWithAsset:asset presetName:AVAssetExportPresetAppleM4A];
+                    
+                    // ✂️ 计算去尾时间长度
+                    CMTime calculatedDuration = CMTimeSubtract(g_lastSoundTime, g_firstSoundTime);
+                    // 加上 0.3 秒的防切断尾音保护
+                    calculatedDuration = CMTimeAdd(calculatedDuration, CMTimeMake(300, 1000));
+                    
+                    // 🛡️ 边界保护：绝对不能超过文件的真实物理长度，防止越界报错！
+                    CMTime actualDuration = asset.duration;
+                    if (CMTimeCompare(calculatedDuration, actualDuration) > 0) {
+                        calculatedDuration = actualDuration;
+                    }
+                    
+                    // ⚡️ 极速直通：使用 Passthrough 原画直通模式，不二次转码，零失败率
+                    AVAssetExportSession *exportSession = [[AVAssetExportSession alloc] initWithAsset:asset presetName:AVAssetExportPresetPassthrough];
                     
                     NSString *targetDir = [[DYYYAudioManager sharedManager] voiceDirectory];
                     NSString *fileName = [NSString stringWithFormat:@"精剪内录_%ld.m4a", (long)[[NSDate date] timeIntervalSince1970]];
@@ -1798,16 +1804,18 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
                     
                     exportSession.outputURL = [NSURL fileURLWithPath:finalPath];
                     exportSession.outputFileType = AVFileTypeAppleM4A;
-                    exportSession.timeRange = CMTimeRangeMake(kCMTimeZero, duration);
+                    exportSession.timeRange = CMTimeRangeMake(kCMTimeZero, calculatedDuration);
                     
                     [exportSession exportAsynchronouslyWithCompletionHandler:^{
+                        // 清理临时文件
                         [[NSFileManager defaultManager] removeItemAtPath:g_tempAudioPath error:nil];
                         
                         dispatch_async(dispatch_get_main_queue(), ^{
                             if (exportSession.status == AVAssetExportSessionStatusCompleted) {
                                 [DYYYUtils showToast:@"✅ ✂️ 掐头去尾成功！原声已存入助手"];
                             } else {
-                                [DYYYUtils showToast:@"❌ 裁剪异常，请重试"];
+                                NSString *errMsg = exportSession.error.localizedDescription ?: @"未知错误";
+                                [DYYYUtils showToast:[NSString stringWithFormat:@"❌ 裁剪失败: %@", errMsg]];
                             }
                             g_assetWriter = nil;
                             g_audioInput = nil;
@@ -1818,16 +1826,16 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
                 [g_assetWriter cancelWriting];
                 [[NSFileManager defaultManager] removeItemAtPath:g_tempAudioPath error:nil];
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    [DYYYUtils showToast:@"⚠️ 未捕捉到任何声音"];
+                    [DYYYUtils showToast:@"⚠️ 未捕捉到有效声音"];
                     g_assetWriter = nil;
                     g_audioInput = nil;
                 });
             }
-        }]; // 第一层闭合
-    } // 第二层闭合
-} // 第三层闭合
+        }];
+    }
+}
 
-@end // 彻底结束类的实现
+@end
 
 // ==========================================
 // 🚀 插件加载时自动显示悬浮窗 (必须完全独立在外层)
@@ -1837,6 +1845,7 @@ static float DYYY_GetBufferAmplitude(CMSampleBufferRef sampleBuffer) {
         [[DYYYRecordWindow sharedWindow] show];
     });
 }
+
 
 
 
