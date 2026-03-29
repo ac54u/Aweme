@@ -1536,53 +1536,48 @@
 }
 %end
 
+
 // ==========================================
-// 🚀 评论区/私信语音提取模块 (精准截获播放源)
+// 🚀 评论区/私信语音提取模块 (支持网络流媒体版)
 // ==========================================
 static NSString *g_lastCapturedAudioPath = nil;
 
-// 封装一个通用的路径判断逻辑，避免重复代码
 static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
-    NSString *path = URL.path;
-    if (!path) return;
+    if (!URL) return;
+    NSString *urlStr = URL.absoluteString;
+    NSString *lowerStr = urlStr.lowercaseString;
     
-    NSString *lowerPath = path.lowercaseString;
-    
-    // 🛑 核心修复：精准黑名单。只屏蔽你的插件生成的临时文件和抖音自己刚录的文件
-    BOOL isMyOwnRecording = [lowerPath containsString:@"temp_trimmed"] ||  // 你裁剪的临时文件
-                            [lowerPath containsString:@"dyyy_"] ||         // 你变声器生成的文件(dyyy_changed / dyyy_fx)
-                            [lowerPath containsString:@"record"] ||        // 正在录制的文件
-                            [lowerPath containsString:@"upload"] ||        // 准备上传的文件
-                            [lowerPath containsString:@"draft"];           // 草稿箱
-                            
-    if (isMyOwnRecording) {
-        // NSLog(@"[DYYY_LOG] 🛡️ 屏蔽自己产生的文件: %@", path);
-        return; 
+    // 🛑 核心黑名单：屏蔽自己录制的、裁剪的、变声的文件
+    if ([lowerStr containsString:@"temp_trimmed"] ||
+        [lowerStr containsString:@"dyyy_"] ||
+        [lowerStr containsString:@"record"] ||
+        [lowerStr containsString:@"upload"] ||
+        [lowerStr containsString:@"draft"]) {
+        return;
     }
     
-    // ✅ 核心修复：扩大白名单。私信在 attachment，评论区通常在 cache
-    BOOL isTargetAudio = [lowerPath containsString:@"cache"] ||
-                         [lowerPath containsString:@"attachment"] ||
-                         [lowerPath containsString:@"comment"] ||
-                         [lowerPath containsString:@"im_audio"] ||
-                         [lowerPath containsString:@"chat"];
+    // ✅ 白名单：本地缓存(私信) OR 网络流媒体(评论区)
+    BOOL isLocalTarget = [lowerStr containsString:@"cache"] ||
+                         [lowerStr containsString:@"attachment"] ||
+                         [lowerStr containsString:@"comment"] ||
+                         [lowerStr containsString:@"im_audio"] ||
+                         [lowerStr containsString:@"chat"];
                          
-    if (isTargetAudio) {
-        // 进一步确认它是音频格式，而不是图片缓存
-        if ([lowerPath.pathExtension isEqualToString:@"m4a"] ||
-            [lowerPath.pathExtension isEqualToString:@"aac"] ||
-            [lowerPath.pathExtension isEqualToString:@"mp3"] ||
-            [lowerPath.pathExtension isEqualToString:@"wav"] ||
-            [lowerPath containsString:@"audio"]) { // 很多缓存没后缀，但名字带有 audio
+    BOOL isNetwork = [lowerStr hasPrefix:@"http"]; // 抖音的评论语音大部分走网络流
+    
+    if (isLocalTarget || isNetwork) {
+        // 过滤掉视频和图片，剩下的就是纯音频流
+        if (![lowerStr containsString:@".mp4"] &&
+            ![lowerStr containsString:@".jpg"] &&
+            ![lowerStr containsString:@".png"] &&
+            ![lowerStr containsString:@".webp"]) {
             
-            g_lastCapturedAudioPath = path;
-            // 打印出来方便我们排查
-            NSLog(@"[DYYY_LOG] 🎯 [%@] 成功捕获他人/评论语音: %@", source, path);
+            g_lastCapturedAudioPath = urlStr;
+            // NSLog(@"[DYYY_LOG] 🎯 [%@] 捕获目标: %@", source, urlStr);
         }
     }
 }
 
-// 🎯 拦截 1：主流网络音频播放核心类 (最容易抓到评论区播放)
 %hook AVPlayerItem
 - (instancetype)initWithURL:(NSURL *)URL {
     DYYY_CheckAndCaptureAudio(URL, @"AVPlayerItem");
@@ -1590,7 +1585,6 @@ static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
 }
 %end
 
-// 🎯 拦截 2：本地音频播放核心类
 %hook AVAudioPlayer
 - (id)initWithContentsOfURL:(NSURL *)url error:(NSError **)outError {
     DYYY_CheckAndCaptureAudio(url, @"AVAudioPlayer");
@@ -1598,7 +1592,6 @@ static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
 }
 %end
 
-// 🎯 拦截 3：读取媒体信息 (保留但加上了严格的黑名单，防误伤自己)
 %hook AVURLAsset
 - (id)initWithURL:(NSURL *)URL options:(NSDictionary<NSString *,id> *)options {
     DYYY_CheckAndCaptureAudio(URL, @"AVURLAsset");
@@ -1606,40 +1599,59 @@ static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
 }
 %end
 
+
 // ==========================================
-// 📱 物理外挂：摇一摇手机触发导出逻辑 (修复播放无声版)
+// 📱 物理外挂：摇一摇手机触发导出逻辑 (网络自适应版)
 // ==========================================
 %hook UIWindow
 - (void)motionEnded:(UIEventSubtype)motion withEvent:(UIEvent *)event {
-    if (motion == UIEventSubtypeMotionShake) {
-        if (g_lastCapturedAudioPath && [[NSFileManager defaultManager] fileExistsAtPath:g_lastCapturedAudioPath]) {
+    if (motion == UIEventSubtypeMotionShake && g_lastCapturedAudioPath) {
+        
+        NSString *targetDir = [[DYYYAudioManager sharedManager] voiceDirectory];
+        
+        // 提取后缀，如果是网络流没有后缀，强行赋予 aac
+        NSString *ext = @"aac";
+        if (g_lastCapturedAudioPath.pathExtension.length > 0 && ![g_lastCapturedAudioPath.pathExtension containsString:@"tmp"]) {
+            ext = g_lastCapturedAudioPath.pathExtension.lowercaseString;
+        }
+        
+        NSString *fileName = [NSString stringWithFormat:@"提取语音_%ld.%@", (long)[[NSDate date] timeIntervalSince1970], ext];
+        NSString *targetPath = [targetDir stringByAppendingPathComponent:fileName];
+        
+        // 🌐 场景 1：如果是网络链接 (评论区语音)
+        if ([g_lastCapturedAudioPath hasPrefix:@"http"]) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [DYYYUtils showToast:@"⏳ 正在下载网络语音..."];
+            });
             
-            // 1. 修复路径Bug：直接保存到语音助手的【根目录】，防止播放器在子目录找不到文件
-            NSString *targetDir = [[DYYYAudioManager sharedManager] voiceDirectory];
+            // 异步后台下载，防止卡死 UI
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                NSData *audioData = [NSData dataWithContentsOfURL:[NSURL URLWithString:g_lastCapturedAudioPath]];
+                
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (audioData && [audioData writeToFile:targetPath atomically:YES]) {
+                        [DYYYUtils showToast:@"✅ 摇一摇：评论语音已成功下载至助手！"];
+                        g_lastCapturedAudioPath = nil; // 导出成功后清空
+                    } else {
+                        [DYYYUtils showToast:@"❌ 语音下载失败，请重新播放一次再摇"];
+                    }
+                });
+            });
             
-            // 2. 修复格式Bug：获取真实的后缀名。如果抖音缓存没有后缀，默认给 aac 防止系统解码器罢工
-            NSString *ext = g_lastCapturedAudioPath.pathExtension.lowercaseString;
-            if (ext.length == 0 || [ext containsString:@"tmp"]) {
-                ext = @"aac"; // 适配抖音底层的原生音频流
-            }
-            
-            NSString *fileName = [NSString stringWithFormat:@"私信导出_%ld.%@", (long)[[NSDate date] timeIntervalSince1970], ext];
-            NSString *targetPath = [targetDir stringByAppendingPathComponent:fileName];
-            
+        } 
+        // 📁 场景 2：如果是本地文件 (私信语音)
+        else if ([[NSFileManager defaultManager] fileExistsAtPath:g_lastCapturedAudioPath]) {
             NSError *error = nil;
             [[NSFileManager defaultManager] copyItemAtPath:g_lastCapturedAudioPath toPath:targetPath error:&error];
             
-            if (!error) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [DYYYUtils showToast:@"✅ 摇一摇：语音已成功导出至音频助手首页~"];
-                });
-                // 导出成功后清空记录，防止下次误摇
-                g_lastCapturedAudioPath = nil; 
-            } else {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [DYYYUtils showToast:@"❌ 导出失败，请重试"];
-                });
-            }
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (!error) {
+                    [DYYYUtils showToast:@"✅ 摇一摇：私信语音已成功提取至助手！"];
+                    g_lastCapturedAudioPath = nil;
+                } else {
+                    [DYYYUtils showToast:@"❌ 本地导出失败"];
+                }
+            });
         }
     }
     %orig;
