@@ -1543,7 +1543,7 @@
 
 
 // ==========================================
-// 🚀 终极核武：渐变悬浮按钮 + 原生内录引擎 (完美复刻版)
+// 🚀 终极核武：全屏穿透防越界悬浮窗 + 原生内录引擎
 // ==========================================
 #import <UIKit/UIKit.h>
 #import <ReplayKit/ReplayKit.h>
@@ -1555,26 +1555,24 @@ static BOOL g_isRecordingPCM = NO;
 static BOOL g_sessionStarted = NO;
 
 // ==========================================
-// 🔴 自定义全局悬浮按钮 (复刻头像在线小圆点)
+// 🔴 全屏透明悬浮窗管理器
 // ==========================================
-@interface DYYYRecordButton : UIWindow
+@interface DYYYRecordWindow : UIWindow
+@property (nonatomic, strong) UIView *floatButton;
 @property (nonatomic, strong) UIView *gradientView;
 @property (nonatomic, strong) CAGradientLayer *gradientLayer;
-+ (instancetype)sharedButton;
++ (instancetype)sharedWindow;
 - (void)show;
 @end
 
-@implementation DYYYRecordButton
+@implementation DYYYRecordWindow
 
-+ (instancetype)sharedButton {
-    static DYYYRecordButton *shared = nil;
++ (instancetype)sharedWindow {
+    static DYYYRecordWindow *shared = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        CGFloat screenW = [UIScreen mainScreen].bounds.size.width;
-        CGFloat screenH = [UIScreen mainScreen].bounds.size.height;
-        // 初始位置：屏幕右侧偏下 (你可以随意拖动)
-        // 尺寸：18x18，完美还原头像右下角状态指示灯的大小
-        shared = [[DYYYRecordButton alloc] initWithFrame:CGRectMake(screenW - 50, screenH * 0.7, 18, 18)];
+        // 🌟 核心修复1：创建一个占满全屏的透明窗口，解决 Toast 定位偏移问题
+        shared = [[DYYYRecordWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
     });
     return shared;
 }
@@ -1582,96 +1580,124 @@ static BOOL g_sessionStarted = NO;
 - (instancetype)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
-        // 突破天际的层级，保证它永远在最上层
         self.windowLevel = UIWindowLevelAlert + 999;
-        self.backgroundColor = [UIColor clearColor];
-        self.clipsToBounds = NO; // 允许阴影溢出
+        self.backgroundColor = [UIColor clearColor]; // 纯透明
         
-        // 1. 核心视觉容器
-        _gradientView = [[UIView alloc] initWithFrame:self.bounds];
-        _gradientView.layer.cornerRadius = frame.size.width / 2.0;
+        CGFloat screenW = frame.size.width;
+        CGFloat screenH = frame.size.height;
+        
+        // 真正的按钮容器 (18x18)
+        _floatButton = [[UIView alloc] initWithFrame:CGRectMake(screenW - 40, screenH * 0.7, 18, 18)];
+        _floatButton.backgroundColor = [UIColor clearColor];
+        
+        // 核心视觉
+        _gradientView = [[UIView alloc] initWithFrame:_floatButton.bounds];
+        _gradientView.layer.cornerRadius = 9.0;
         _gradientView.clipsToBounds = YES;
-        
-        // 2. 完美复刻白色描边
         _gradientView.layer.borderWidth = 2.0;
         _gradientView.layer.borderColor = [UIColor whiteColor].CGColor;
         
-        // 3. 完美复刻 绿蓝渐变色
+        // 绿蓝渐变
         _gradientLayer = [CAGradientLayer layer];
         _gradientLayer.frame = _gradientView.bounds;
         _gradientLayer.colors = @[
-            (__bridge id)[UIColor colorWithRed:0.0 green:0.89 blue:0.59 alpha:1.0].CGColor, // 顶部：清新绿
-            (__bridge id)[UIColor colorWithRed:0.16 green:0.47 blue:1.0 alpha:1.0].CGColor  // 底部：深邃蓝
+            (__bridge id)[UIColor colorWithRed:0.0 green:0.89 blue:0.59 alpha:1.0].CGColor,
+            (__bridge id)[UIColor colorWithRed:0.16 green:0.47 blue:1.0 alpha:1.0].CGColor
         ];
         _gradientLayer.startPoint = CGPointMake(0.2, 0);
         _gradientLayer.endPoint = CGPointMake(0.8, 1);
         [_gradientView.layer addSublayer:_gradientLayer];
         
-        [self addSubview:_gradientView];
+        [_floatButton addSubview:_gradientView];
         
-        // 4. 添加一点隐形阴影，让它在纯白背景下也能看清边缘
-        self.layer.shadowColor = [UIColor blackColor].CGColor;
-        self.layer.shadowOffset = CGSizeMake(0, 1);
-        self.layer.shadowOpacity = 0.2;
-        self.layer.shadowRadius = 2;
+        // 阴影
+        _floatButton.layer.shadowColor = [UIColor blackColor].CGColor;
+        _floatButton.layer.shadowOffset = CGSizeMake(0, 1);
+        _floatButton.layer.shadowOpacity = 0.2;
+        _floatButton.layer.shadowRadius = 2;
         
-        // 5. 绑定手势：点击(录音/停止) + 拖拽(移动位置)
+        [self addSubview:_floatButton];
+        
+        // 绑定手势
         UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTap)];
-        [self addGestureRecognizer:tap];
+        [_floatButton addGestureRecognizer:tap];
         
         UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
-        [self addGestureRecognizer:pan];
+        [_floatButton addGestureRecognizer:pan];
     }
     return self;
+}
+
+// 🌟 核心修复2：事件穿透魔法。只拦截小圆点附近的点击，其余操作全部放行给抖音
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    // 扩大按钮触控热区 (上下左右各外扩 20 像素，闭着眼也能点到)
+    CGRect hitArea = CGRectInset(_floatButton.frame, -20, -20);
+    if (CGRectContainsPoint(hitArea, point)) {
+        return _floatButton; 
+    }
+    return nil; // 让事件穿透到下层的抖音 UI
 }
 
 - (void)show {
     self.hidden = NO;
 }
 
-// ⚠️ 物理外挂：18x18 的点太小，手指很难点中。这里强行扩大它的“触控响应热区”到 44x44，闭着眼睛都能点到！
-- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
-    CGRect hitArea = CGRectInset(self.bounds, -15, -15);
-    return CGRectContainsPoint(hitArea, point);
-}
-
-// 支持全屏幕随意拖拽
+// 🌟 核心修复3：拖拽与智能吸附边界 (解决拖动消失问题)
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
-    CGPoint translation = [pan translationInView:self.superview];
-    self.center = CGPointMake(self.center.x + translation.x, self.center.y + translation.y);
-    [pan setTranslation:CGPointZero inView:self.superview];
+    CGPoint translation = [pan translationInView:self];
+    _floatButton.center = CGPointMake(_floatButton.center.x + translation.x, _floatButton.center.y + translation.y);
+    [pan setTranslation:CGPointZero inView:self]; // 每次拖动后清零增量
+    
+    // 手指松开时，自动吸附到屏幕边缘
+    if (pan.state == UIGestureRecognizerStateEnded || pan.state == UIGestureRecognizerStateCancelled) {
+        CGFloat screenW = self.bounds.size.width;
+        CGFloat screenH = self.bounds.size.height;
+        CGFloat newX = _floatButton.center.x;
+        CGFloat newY = _floatButton.center.y;
+        
+        // 左右吸附
+        if (newX < screenW / 2.0) {
+            newX = 25; // 靠左
+        } else {
+            newX = screenW - 25; // 靠右
+        }
+        
+        // 上下防出界
+        if (newY < 100) newY = 100;
+        if (newY > screenH - 120) newY = screenH - 120;
+        
+        [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.5 options:UIViewAnimationOptionCurveEaseOut animations:^{
+            self->_floatButton.center = CGPointMake(newX, newY);
+        } completion:nil];
+    }
 }
 
-// 🌟 录音时的“呼吸灯”动画
+// 录音时的呼吸灯
 - (void)startPulseAnimation {
     CABasicAnimation *pulse = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
     pulse.duration = 0.6;
     pulse.fromValue = @1.0;
-    pulse.toValue = @1.3; // 录音时微微变大呼吸
+    pulse.toValue = @1.4;
     pulse.autoreverses = YES;
     pulse.repeatCount = HUGE_VALF;
     [self.gradientView.layer addAnimation:pulse forKey:@"pulsing"];
-    
-    // 录音时描边变成红色警告
     self.gradientView.layer.borderColor = [UIColor colorWithRed:1.0 green:0.2 blue:0.2 alpha:1.0].CGColor;
 }
 
 - (void)stopPulseAnimation {
     [self.gradientView.layer removeAnimationForKey:@"pulsing"];
-    // 恢复白边
     self.gradientView.layer.borderColor = [UIColor whiteColor].CGColor;
 }
 
 // ==========================================
-// 🎧 核心录音逻辑 (绑定在悬浮按钮的点击上)
+// 🎧 核心录音逻辑
 // ==========================================
 - (void)handleTap {
-    // 🔴【开始录制】
     if (!g_isRecordingPCM) {
         g_isRecordingPCM = YES;
         g_sessionStarted = NO;
         
-        [self startPulseAnimation]; // 开启呼吸灯动画
+        [self startPulseAnimation];
         
         NSString *targetDir = [[DYYYAudioManager sharedManager] voiceDirectory];
         NSString *fileName = [NSString stringWithFormat:@"无损内录_%ld.m4a", (long)[[NSDate date] timeIntervalSince1970]];
@@ -1724,10 +1750,9 @@ static BOOL g_sessionStarted = NO;
             });
         }];
     } 
-    // ⏹️【停止录制并保存】
     else {
         g_isRecordingPCM = NO;
-        [self stopPulseAnimation]; // 停止呼吸灯
+        [self stopPulseAnimation]; 
         
         [[RPScreenRecorder sharedRecorder] stopCaptureWithHandler:^(NSError *error) {
             if (g_sessionStarted) {
@@ -1753,14 +1778,14 @@ static BOOL g_sessionStarted = NO;
 @end
 
 // ==========================================
-// 🚀 插件加载时自动显示悬浮窗
+// 🚀 插件加载时自动显示全屏透明悬浮窗
 // ==========================================
 %ctor {
-    // 延迟 3 秒显示，确保抖音的主界面已经加载完毕
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [[DYYYRecordButton sharedButton] show];
+        [[DYYYRecordWindow sharedWindow] show];
     });
 }
+
 
 
 
