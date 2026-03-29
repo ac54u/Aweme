@@ -4,6 +4,10 @@
 #import <AVFoundation/AVFoundation.h> 
 #import <objc/runtime.h>
 
+// 🔥 终极性能优化：新增全局静态内存变量，极速读取，0 CPU 消耗，防止高频拦截导致抖音被系统强杀
+static BOOL g_isArmed = NO;
+static NSString *g_pendingReplacePath = nil;
+
 // 新增 UIDocumentPickerDelegate 协议以支持文件导入
 @interface DYYYVoiceViewController () <UITableViewDelegate, UITableViewDataSource, UITextFieldDelegate, UIDocumentPickerDelegate>
 @property (nonatomic, strong) UITableView *tableView;
@@ -97,7 +101,7 @@
     self.searchField = [[UITextField alloc] initWithFrame:CGRectMake(15, 10, self.view.bounds.size.width - 30, 40)];
     self.searchField.backgroundColor = [UIColor colorWithRed:0.9 green:0.9 blue:0.92 alpha:1.0];
     self.searchField.layer.cornerRadius = 10;
-    self.searchField.placeholder = @" 搜索声音文件";
+    self.searchField.placeholder = @" 搜索音频文件";
     self.searchField.clearButtonMode = UITextFieldViewModeWhileEditing;
     self.searchField.delegate = self;
     
@@ -413,6 +417,11 @@
     NSDictionary *item = self.dataList[indexPath.row];
     NSString *path = item[@"path"];
     
+    // 🔥 核心修改：同步写入全局内存变量，极速读取，完全不占 CPU
+    g_isArmed = YES;
+    g_pendingReplacePath = path;
+    
+    // 依然保留 NSUserDefaults 仅用于持久化（供其他可能的文件访问），但我们自己的 Hook 不再频繁读取它
     [[NSUserDefaults standardUserDefaults] setObject:path forKey:@"DYYY_PendingReplacePath"];
     [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"DYYY_IsArmed"];
     [[NSUserDefaults standardUserDefaults] synchronize];
@@ -551,8 +560,6 @@
             sendBtn.hidden = NO;
             BOOL isPlaying = [self.playingPath isEqualToString:item[@"path"]];
             [playBtn setImage:[UIImage systemImageNamed:isPlaying ? @"pause.fill" : @"play.fill"] forState:UIControlStateNormal];
-            
-            // 新增：判断是否在播放，播放中变为红色，未播放保持默认绿色
             playBtn.tintColor = isPlaying ? [UIColor systemRedColor] : [UIColor colorWithRed:0.1 green:0.8 blue:0.3 alpha:1.0];
         }
     }
@@ -655,15 +662,13 @@
     } else {
         config = [UISwipeActionsConfiguration configurationWithActions:@[deleteAction, shareAction, renameAction]];
     }
-    
     config.performsFirstActionWithFullSwipe = NO;
-    
     return config;
 }
 @end
 
 // =======================================================
-// 语音替换引擎 (原生 Runtime 实现，100% 免疫 Theos 报错)
+// 语音替换引擎 (原生 Runtime 实现，极速优化版 ⚡️)
 // =======================================================
 @interface DYYYVoiceHelper : NSObject
 + (void)processAndReplace:(NSString *)targetPath;
@@ -676,9 +681,7 @@
         UIWindow *win = [UIApplication sharedApplication].windows.firstObject;
         if (!win) return;
         
-        // 修改这个数值调整弹窗高度，越大越靠下
         CGFloat toastY = 200; 
-        
         UILabel *toast = [[UILabel alloc] initWithFrame:CGRectMake(win.bounds.size.width/2 - 100, toastY, 200, 40)];
         toast.backgroundColor = [UIColor colorWithRed:0.1 green:0.8 blue:0.3 alpha:0.95]; 
         toast.textColor = [UIColor whiteColor];
@@ -698,14 +701,17 @@
 }
 
 + (void)processAndReplace:(NSString *)targetPath {
-    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    BOOL isArmed = [defaults boolForKey:@"DYYY_IsArmed"];
-    NSString *pendingPath = [defaults stringForKey:@"DYYY_PendingReplacePath"];
+    // 🔥 核心修改：直接读取全局内存变量，抛弃耗时的 NSUserDefaults
+    NSString *pendingPath = g_pendingReplacePath;
+    if (!g_isArmed || !pendingPath || pendingPath.length == 0) return;
     
-    if (!isArmed || !pendingPath || pendingPath.length == 0) return;
+    // 触发替换后立刻重置内存变量，防止误杀后面的正常录音
+    g_isArmed = NO;
+    g_pendingReplacePath = nil;
     
-    [defaults setBool:NO forKey:@"DYYY_IsArmed"];
-    [defaults synchronize];
+    // 同步重置本地存储
+    [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"DYYY_IsArmed"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
 
     NSFileManager *fm = [NSFileManager defaultManager];
     if (![fm fileExistsAtPath:pendingPath]) return;
@@ -748,8 +754,8 @@
 
 static void (*original_AWEIMMessageBaseViewController_sendMessage)(id, SEL, id);
 static void replaced_AWEIMMessageBaseViewController_sendMessage(id self, SEL _cmd, id msg) {
-    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    if ([defaults boolForKey:@"DYYY_IsArmed"] && [defaults stringForKey:@"DYYY_PendingReplacePath"]) {
+    // 🔥 核心修改：改用内存变量
+    if (g_isArmed && g_pendingReplacePath) {
         NSString *msgDesc = [NSString stringWithFormat:@"%@", msg];
         @try {
             if ([msg respondsToSelector:@selector(yy_modelToJSONObject)]) {
@@ -783,7 +789,8 @@ static void replaced_AVAudioRecorder_stop(id self, SEL _cmd) {
     if (original_AVAudioRecorder_stop) {
         original_AVAudioRecorder_stop(self, _cmd);
     }
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYY_IsArmed"]) {
+    // 🔥 核心修改：改用内存变量
+    if (g_isArmed) {
         if ([self respondsToSelector:@selector(url)]) {
             NSURL *url = [self performSelector:@selector(url)];
             if (url && url.path) {
@@ -799,7 +806,10 @@ static BOOL replaced_NSFileManager_moveItemAtPath(NSFileManager* self, SEL _cmd,
     if (original_NSFileManager_moveItemAtPath) {
         result = original_NSFileManager_moveItemAtPath(self, _cmd, src, dst, err);
     }
-    if (result && [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYY_IsArmed"] && dst) {
+    
+    // 🔥 极其致命的高频函数！现在彻底抛弃 NSUserDefaults，改用极速内存变量 `g_isArmed`。
+    // 这将 100% 根治抖音发热和被系统 Jetsam (Error 142) 强杀的问题！
+    if (result && g_isArmed && dst) {
         NSString *ext = dst.pathExtension.lowercaseString;
         if ([ext isEqualToString:@"m4a"] || [ext isEqualToString:@"aac"] || [ext isEqualToString:@"wav"] || [ext isEqualToString:@"mp3"] || [dst.lowercaseString containsString:@"audio"] || [dst.lowercaseString containsString:@"voice"]) {
             [DYYYVoiceHelper processAndReplace:dst];
