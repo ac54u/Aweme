@@ -1539,123 +1539,108 @@
 
 // =======================================
 // ==========================================
-// 🚀 终极核武 (安全不闪退版)：ReplayKit 物理级 PCM 截获引擎
+
+// ==========================================
+// 🚀 终极核武 (极简+原声音质版)：ReplayKit + AVAssetWriter 内录引擎
 // ==========================================
 #import <ReplayKit/ReplayKit.h>
-#import <CoreMedia/CoreMedia.h>
+#import <AVFoundation/AVFoundation.h>
 
-static NSMutableData *g_pcmData = nil;
+static AVAssetWriter *g_assetWriter = nil;
+static AVAssetWriterInput *g_audioInput = nil;
 static BOOL g_isRecordingPCM = NO;
-static Float64 g_sampleRate = 44100.0;
-static UInt32 g_channels = 2;
-static UInt32 g_bitsPerChannel = 16;
-static BOOL g_isFloat = NO;
-
-// 给赤裸裸的 PCM 数据穿上 WAV 的衣服
-static NSData *DYYY_WrapPCMToWAV(NSData *pcmData, int sampleRate, int channels, int bits, BOOL isFloat) {
-    NSMutableData *wavData = [[NSMutableData alloc] init];
-    [wavData appendBytes:"RIFF" length:4];
-    int chunkSize = 36 + (int)pcmData.length;
-    [wavData appendBytes:&chunkSize length:4];
-    [wavData appendBytes:"WAVE" length:4];
-    [wavData appendBytes:"fmt " length:4];
-    int subchunk1Size = 16;
-    [wavData appendBytes:&subchunk1Size length:4];
-    short audioFormat = isFloat ? 3 : 1; 
-    [wavData appendBytes:&audioFormat length:2];
-    short numChannels = channels;
-    [wavData appendBytes:&numChannels length:2];
-    int sr = sampleRate;
-    [wavData appendBytes:&sr length:4];
-    int byteRate = sampleRate * channels * (bits / 8);
-    [wavData appendBytes:&byteRate length:4];
-    short blockAlign = channels * (bits / 8);
-    [wavData appendBytes:&blockAlign length:2];
-    short bps = bits;
-    [wavData appendBytes:&bps length:2];
-    [wavData appendBytes:"data" length:4];
-    int dataSize = (int)pcmData.length;
-    [wavData appendBytes:&dataSize length:4];
-    [wavData appendData:pcmData];
-    return wavData;
-}
+static BOOL g_sessionStarted = NO;
 
 // ==========================================
-// 📱 摇一摇开关：系统级内部录音机 (Start / Stop)
+// 📱 摇一摇开关：苹果原生级无损内录 (Start / Stop)
 // ==========================================
 %hook UIWindow
 - (void)motionEnded:(UIEventSubtype)motion withEvent:(UIEvent *)event {
     if (motion == UIEventSubtypeMotionShake) {
         
+        // 🔴【开始录制】
         if (!g_isRecordingPCM) {
             g_isRecordingPCM = YES;
-            g_pcmData = [[NSMutableData alloc] init];
+            g_sessionStarted = NO;
             
+            NSString *targetDir = [[DYYYAudioManager sharedManager] voiceDirectory];
+            NSString *fileName = [NSString stringWithFormat:@"无损内录_%ld.m4a", (long)[[NSDate date] timeIntervalSince1970]];
+            NSString *targetPath = [targetDir stringByAppendingPathComponent:fileName];
+            
+            // 初始化原生音频写入器 (直接输出 M4A 格式)
+            NSError *err = nil;
+            g_assetWriter = [[AVAssetWriter alloc] initWithURL:[NSURL fileURLWithPath:targetPath] fileType:AVFileTypeAppleM4A error:&err];
+            
+            // 配置高音质 AAC 编码
+            AudioChannelLayout acl;
+            bzero(&acl, sizeof(acl));
+            acl.mChannelLayoutTag = kAudioChannelLayoutTag_Stereo;
+            NSDictionary *audioSettings = @{
+                AVFormatIDKey: @(kAudioFormatMPEG4AAC),
+                AVNumberOfChannelsKey: @(2),
+                AVSampleRateKey: @(44100.0),
+                AVEncoderBitRateKey: @(128000),
+                AVChannelLayoutKey: [NSData dataWithBytes:&acl length:sizeof(acl)]
+            };
+            
+            g_audioInput = [[AVAssetWriterInput alloc] initWithMediaType:AVMediaTypeAudio outputSettings:audioSettings];
+            g_audioInput.expectsMediaDataInRealTime = YES;
+            
+            if ([g_assetWriter canAddInput:g_audioInput]) {
+                [g_assetWriter addInput:g_audioInput];
+            }
+            [g_assetWriter startWriting];
+            
+            // 启动底层录音 (只录 App 声音，不录麦克风)
             RPScreenRecorder *recorder = [RPScreenRecorder sharedRecorder];
-            recorder.microphoneEnabled = NO; // 🛑 核心：绝对纯净，拒绝麦克风杂音！
+            recorder.microphoneEnabled = NO; 
             
             [recorder startCaptureWithHandler:^(CMSampleBufferRef sampleBuffer, RPSampleBufferType bufferType, NSError *error) {
-                // 🎯 精准打击：只截获 App 内部发送给扬声器的真实声音
+                // 🎯 拦截纯粹的内部声音
                 if (bufferType == RPSampleBufferTypeAudioApp) {
-                    
-                    // 1. 动态获取音频真实格式 (解决杂音/加速问题)
-                    if (g_pcmData.length == 0) {
-                        CMAudioFormatDescriptionRef format = CMSampleBufferGetFormatDescription(sampleBuffer);
-                        const AudioStreamBasicDescription *asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format);
-                        if (asbd) {
-                            g_sampleRate = asbd->mSampleRate;
-                            g_channels = asbd->mChannelsPerFrame;
-                            g_bitsPerChannel = asbd->mBitsPerChannel;
-                            g_isFloat = (asbd->mFormatFlags & kAudioFormatFlagIsFloat) != 0;
-                        }
+                    if (!g_sessionStarted) {
+                        g_sessionStarted = YES;
+                        // 记录第一帧的时间戳
+                        [g_assetWriter startSessionAtSourceTime:CMSampleBufferGetPresentationTimeStamp(sampleBuffer)];
                     }
-                    
-                    // 2. 核心突破：从系统缓存池中强行抽出你想要的 AudioBufferList！
-                    CMBlockBufferRef blockBuffer = NULL;
-                    AudioBufferList audioBufferList;
-                    CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sampleBuffer, NULL, &audioBufferList, sizeof(audioBufferList), NULL, NULL, kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, &blockBuffer);
-                    
-                    for (int i = 0; i < audioBufferList.mNumberBuffers; i++) {
-                        AudioBuffer audioBuffer = audioBufferList.mBuffers[i];
-                        if (audioBuffer.mData && audioBuffer.mDataByteSize > 0) {
-                            [g_pcmData appendBytes:audioBuffer.mData length:audioBuffer.mDataByteSize];
-                        }
+                    if (g_audioInput.isReadyForMoreMediaData) {
+                        // 自动硬件编码并写入文件！完全不需要我们操心格式！
+                        [g_audioInput appendSampleBuffer:sampleBuffer];
                     }
-                    if (blockBuffer) CFRelease(blockBuffer);
                 }
             } completionHandler:^(NSError *error) {
                 dispatch_async(dispatch_get_main_queue(), ^{
                     if (error) {
-                        [DYYYUtils showToast:[NSString stringWithFormat:@"❌ 截获启动失败: %@", error.localizedDescription]];
+                        [DYYYUtils showToast:@"❌ 截获启动失败，请检查系统权限"];
                         g_isRecordingPCM = NO;
                     } else {
-                        [DYYYUtils showToast:@"🔴 已开启内部 PCM 截获\n请播放评论语音，听完后再次摇一摇！"];
+                        [DYYYUtils showToast:@"🔴 正在录制...\n请播放要提取的语音，听完后再次摇一摇"];
                     }
                 });
             }];
-            
-        } else {
+        } 
+        // ⏹️【停止录制并保存】
+        else {
             g_isRecordingPCM = NO;
             [[RPScreenRecorder sharedRecorder] stopCaptureWithHandler:^(NSError *error) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    if (g_pcmData.length > 0) {
-                        // 将提取出的 PCM 数据封装成标准的 WAV 音频文件
-                        NSData *wavData = DYYY_WrapPCMToWAV(g_pcmData, g_sampleRate, g_channels, g_bitsPerChannel, g_isFloat);
-                        
-                        NSString *targetDir = [[DYYYAudioManager sharedManager] voiceDirectory];
-                        NSString *fileName = [NSString stringWithFormat:@"纯净内录_%ld.wav", (long)[[NSDate date] timeIntervalSince1970]];
-                        NSString *targetPath = [targetDir stringByAppendingPathComponent:fileName];
-                        
-                        if ([wavData writeToFile:targetPath atomically:YES]) {
-                            [DYYYUtils showToast:@"✅ 物理截获成功！纯净声音已存入助手！"];
-                        } else {
-                            [DYYYUtils showToast:@"❌ 写入文件失败"];
-                        }
-                        g_pcmData = nil;
-                    } else {
-                        [DYYYUtils showToast:@"⚠️ 未捕捉到任何内部声音"];
-                    }
-                });
+                // 必须在有音频数据写入的情况下才能 Finish，否则会崩溃
+                if (g_sessionStarted) {
+                    [g_audioInput markAsFinished];
+                    [g_assetWriter finishWritingWithCompletionHandler:^{
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            [DYYYUtils showToast:@"✅ 提取完美成功！(m4a 原声音质)"];
+                            g_assetWriter = nil;
+                            g_audioInput = nil;
+                        });
+                    }];
+                } else {
+                    [g_assetWriter cancelWriting];
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [DYYYUtils showToast:@"⚠️ 未捕捉到任何声音\n(刚才没有播放语音)"];
+                        g_assetWriter = nil;
+                        g_audioInput = nil;
+                    });
+                }
             }];
         }
     }
