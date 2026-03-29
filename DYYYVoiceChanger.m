@@ -1,20 +1,43 @@
 #import "DYYYVoiceChanger.h"
 
+// 全局静态变量，记录音频助手是否处于激活/发送状态
+static BOOL _isAudioAssistantActive = NO;
+
 @implementation DYYYVoiceChanger
+
+// 🚀 新增：实现状态管理
++ (void)setAudioAssistantActive:(BOOL)active {
+    _isAudioAssistantActive = active;
+    NSLog(@"[DYYYVoiceChanger] 🎛️ 音频助手状态已切换为: %@", active ? @"开启 (免检模式)" : @"关闭 (拦截模式)");
+}
+
++ (BOOL)isAudioAssistantActive {
+    return _isAudioAssistantActive;
+}
 
 // --- 供 Hook 调用的同步方法 ---
 + (BOOL)processAudioFileFrom:(NSString *)srcPath to:(NSString *)dstPath {
+    
+    // 🛡️ 核心防御：如果音频助手正在使用，直接跳过变音，返回 NO 让外部走原逻辑！
+    if ([self isAudioAssistantActive]) {
+        NSLog(@"[DYYYVoiceChanger] 🎧 音频助手正在工作，放行原声文件！");
+        return NO; 
+    }
+
     NSInteger voiceType = [[NSUserDefaults standardUserDefaults] integerForKey:@"DYYYVoiceChangerType"];
     
+    // 如果是 0 (正常原声)，也跳过
     if (voiceType == 0) {
         NSLog(@"[DYYYVoiceChanger] 当前设置为正常原声，跳过渲染。");
         return NO; 
     }
     
+    // ... 下面的变音渲染代码保持原样不变 ...
     __block BOOL processSuccess = NO;
     dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
     
     NSLog(@"[DYYYVoiceChanger] ⏳ 开始处理音频，应用特效类型: %ld", (long)voiceType);
+    // ... [self processAudioAtPath:...]
     
     // 🚀 这里改为传入 voiceType
     [self processAudioAtPath:srcPath withVoiceType:voiceType completion:^(NSString *outputPath, NSError *error) {

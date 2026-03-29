@@ -3,9 +3,12 @@
 
 @interface DYYYVoiceChanger : NSObject
 
+// 🚀 新增：控制和获取音频助手的工作状态
++ (void)setAudioAssistantActive:(BOOL)active;
++ (BOOL)isAudioAssistantActive;
+
 + (BOOL)processAudioFileFrom:(NSString *)srcPath to:(NSString *)dstPath;
 
-// 🚀 升级：参数改为直接传入用户选择的 voiceType
 + (void)processAudioAtPath:(NSString *)inputPath
              withVoiceType:(NSInteger)voiceType 
                 completion:(void(^)(NSString *outputPath, NSError *error))completion;

@@ -701,20 +701,20 @@ static NSString *g_pendingReplacePath = nil;
 }
 
 + (void)processAndReplace:(NSString *)targetPath {
-    // 🔥 核心修改：直接读取全局内存变量，抛弃耗时的 NSUserDefaults
     NSString *pendingPath = g_pendingReplacePath;
     if (!g_isArmed || !pendingPath || pendingPath.length == 0) return;
     
-    // 触发替换后立刻重置内存变量，防止误杀后面的正常录音
     g_isArmed = NO;
     g_pendingReplacePath = nil;
     
-    // 同步重置本地存储
     [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"DYYY_IsArmed"];
     [[NSUserDefaults standardUserDefaults] synchronize];
 
     NSFileManager *fm = [NSFileManager defaultManager];
     if (![fm fileExistsAtPath:pendingPath]) return;
+    
+    // 📢 发号施令 1：开始替换文件前，告诉变声器“我现在是音频助手，请放行！”
+    [DYYYVoiceChanger setAudioAssistantActive:YES];
     
     NSTimeInterval duration = CMTimeGetSeconds([AVURLAsset assetWithURL:[NSURL fileURLWithPath:pendingPath]].duration);
     
@@ -722,31 +722,49 @@ static NSString *g_pendingReplacePath = nil;
         if ([fm fileExistsAtPath:targetPath]) [fm removeItemAtPath:targetPath error:nil];
         [fm copyItemAtPath:pendingPath toPath:targetPath error:nil];
         [self showCustomToast:@"✅ 语音发送替换成功！"];
+        
+        // 📢 发号施令 2：替换完成。延迟 1.5 秒后关闭免检，确保抖音底层已经发完这个文件
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [DYYYVoiceChanger setAudioAssistantActive:NO];
+        });
+        
     } else {
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            [self showCustomToast:@"⏳ 音频过长，正在为您自动裁剪..."];
-            NSString *tempTrimmedPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"temp_trimmed.m4a"];
-            if ([fm fileExistsAtPath:tempTrimmedPath]) [fm removeItemAtPath:tempTrimmedPath error:nil];
-            
-            AVAsset *asset = [AVAsset assetWithURL:[NSURL fileURLWithPath:pendingPath]];
-            AVAssetExportSession *exportSession = [AVAssetExportSession exportSessionWithAsset:asset presetName:AVAssetExportPresetAppleM4A];
-            exportSession.outputURL = [NSURL fileURLWithPath:tempTrimmedPath];
-            exportSession.outputFileType = AVFileTypeAppleM4A;
-            exportSession.timeRange = CMTimeRangeFromTimeToTime(CMTimeMake(0, 1), CMTimeMakeWithSeconds(29.5, 600));
-            
-            dispatch_semaphore_t sema = dispatch_semaphore_create(0);
-            [exportSession exportAsynchronouslyWithCompletionHandler:^{ dispatch_semaphore_signal(sema); }];
-            dispatch_semaphore_wait(sema, DISPATCH_TIME_FOREVER);
-            
-            if (exportSession.status == AVAssetExportSessionStatusCompleted) {
-                if ([fm fileExistsAtPath:targetPath]) [fm removeItemAtPath:targetPath error:nil];
-                [fm copyItemAtPath:tempTrimmedPath toPath:targetPath error:nil];
-                [self showCustomToast:@"✅ 已裁剪并替换 (29s)"];
-            } else {
-                [self showCustomToast:@"❌ 裁剪失败，将原样强制替换"];
-                if ([fm fileExistsAtPath:targetPath]) [fm removeItemAtPath:targetPath error:nil];
-                [fm copyItemAtPath:pendingPath toPath:targetPath error:nil];
-            }
+        [self showCustomToast:@"⏳ 音频过长，正在为您自动裁剪..."];
+        
+        NSString *tempTrimmedPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"temp_trimmed.m4a"];
+        if ([fm fileExistsAtPath:tempTrimmedPath]) [fm removeItemAtPath:tempTrimmedPath error:nil];
+        
+        AVAsset *asset = [AVAsset assetWithURL:[NSURL fileURLWithPath:pendingPath]];
+        AVAssetExportSession *exportSession = [AVAssetExportSession exportSessionWithAsset:asset presetName:AVAssetExportPresetAppleM4A];
+        exportSession.outputURL = [NSURL fileURLWithPath:tempTrimmedPath];
+        exportSession.outputFileType = AVFileTypeAppleM4A;
+        exportSession.timeRange = CMTimeRangeFromTimeToTime(CMTimeMake(0, 1), CMTimeMakeWithSeconds(29.5, 600));
+        
+        // ⚠️ 关键修复：移除 dispatch_async，直接在当前线程阻塞等待裁剪完成
+        dispatch_semaphore_t sema = dispatch_semaphore_create(0);
+        
+        [exportSession exportAsynchronouslyWithCompletionHandler:^{
+            dispatch_semaphore_signal(sema);
+        }];
+        
+        // 设置超时时间保护 (15秒)，防止意外卡死
+        dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15.0 * NSEC_PER_SEC));
+        dispatch_semaphore_wait(sema, timeout);
+        
+        // 阻塞结束后，再执行后续的文件替换动作
+        if (exportSession.status == AVAssetExportSessionStatusCompleted) {
+            if ([fm fileExistsAtPath:targetPath]) [fm removeItemAtPath:targetPath error:nil];
+            [fm copyItemAtPath:tempTrimmedPath toPath:targetPath error:nil];
+            [self showCustomToast:@"✅ 已裁剪并替换 (29s)"];
+        } else {
+            [self showCustomToast:@"❌ 裁剪失败，将原样强制替换"];
+            if ([fm fileExistsAtPath:targetPath]) [fm removeItemAtPath:targetPath error:nil];
+            [fm copyItemAtPath:pendingPath toPath:targetPath error:nil];
+        }
+        
+        // 📢 发号施令 3：长音频裁剪+替换完成。同样延迟 1.5 秒后关闭免检
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [DYYYVoiceChanger setAudioAssistantActive:NO];
         });
     }
 }
