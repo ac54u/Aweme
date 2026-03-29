@@ -1537,18 +1537,33 @@
 %end
 
 // ==========================================
-// 🚀 私信语音提取模块 (底层拦截 + 原生菜单强注)
+// 🚀 私信语音提取模块 (底层拦截 + 防误伤黑名单版)
 // ==========================================
 static NSString *g_lastCapturedAudioPath = nil;
 
 %hook AVURLAsset
 - (id)initWithURL:(NSURL *)URL options:(NSDictionary<NSString *,id> *)options {
     NSString *path = URL.path;
-    if (path && ([path.pathExtension.lowercaseString isEqualToString:@"m4a"] ||
-                 [path.pathExtension.lowercaseString isEqualToString:@"aac"] ||
-                 [path.lowercaseString containsString:@"im_audio"] ||
-                 [path.lowercaseString containsString:@"chat"])) {
-        g_lastCapturedAudioPath = path;
+    if (path) {
+        NSString *lowerPath = path.lowercaseString;
+        
+        // 🛑 核心修复：定义路径黑名单 (拦截自己刚录制的临时文件)
+        BOOL isMyOwnRecording = [lowerPath containsString:@"/tmp/"] || 
+                                [lowerPath containsString:@"record"] || 
+                                [lowerPath containsString:@"upload"] || 
+                                [lowerPath containsString:@"draft"];
+        
+        // 只有【不是自己的临时录音】，且【符合音频特征】的，才记录！
+        if (!isMyOwnRecording) {
+            if ([lowerPath.pathExtension isEqualToString:@"m4a"] ||
+                [lowerPath.pathExtension isEqualToString:@"aac"] ||
+                [lowerPath containsString:@"im_audio"] ||
+                [lowerPath containsString:@"chat"]) {
+                
+                g_lastCapturedAudioPath = path;
+                // NSLog(@"[DYYY_LOG] 🎯 成功捕获他人语音: %@", path);
+            }
+        }
     }
     return %orig;
 }
@@ -1557,15 +1572,31 @@ static NSString *g_lastCapturedAudioPath = nil;
 %hook AVAudioPlayer
 - (id)initWithContentsOfURL:(NSURL *)url error:(NSError **)outError {
     NSString *path = url.path;
-    if (path && ([path.pathExtension.lowercaseString isEqualToString:@"m4a"] ||
-                 [path.pathExtension.lowercaseString isEqualToString:@"aac"] ||
-                 [path.lowercaseString containsString:@"im_audio"] ||
-                 [path.lowercaseString containsString:@"chat"])) {
-        g_lastCapturedAudioPath = path;
+    if (path) {
+        NSString *lowerPath = path.lowercaseString;
+        
+        // 🛑 同样的黑名单逻辑
+        BOOL isMyOwnRecording = [lowerPath containsString:@"/tmp/"] || 
+                                [lowerPath containsString:@"record"] || 
+                                [lowerPath containsString:@"upload"] || 
+                                [lowerPath containsString:@"draft"];
+                                
+        if (!isMyOwnRecording) {
+            if ([lowerPath.pathExtension isEqualToString:@"m4a"] ||
+                [lowerPath.pathExtension isEqualToString:@"aac"] ||
+                [lowerPath containsString:@"im_audio"] ||
+                [lowerPath containsString:@"chat"]) {
+                
+                g_lastCapturedAudioPath = path;
+                // NSLog(@"[DYYY_LOG] 🎯 成功捕获他人语音: %@", path);
+            }
+        }
     }
     return %orig;
 }
 %end
+
+
 
 // ==========================================
 // 📱 物理外挂：摇一摇手机触发导出逻辑 (修复播放无声版)
