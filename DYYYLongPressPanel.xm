@@ -1538,58 +1538,102 @@
 
 
 // ==========================================
-// 🚀 评论区/私信语音提取模块 (数据流直抽 + 物理捞针 终极免报错版)
+// 🚀 评论区/私信语音提取模块 (雷达+捞针 终极融合强显版)
 // ==========================================
 
+static NSString *g_lastCapturedAudioPath = nil;
+static BOOL g_isLastCapturedNetwork = NO; 
 static NSString *g_lastCapturedDataPath = nil;
 
-// 🌟 终极杀招：全局扫描最近 10 秒内产生的新媒体数据流 (无视任何播放器混淆)
+// ================= 1. 精准雷达 (专抓私信与明文播放) =================
+static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
+    if (!URL) return;
+    NSString *urlStr = URL.absoluteString;
+    NSString *localPath = URL.path; 
+    NSString *lowerStr = urlStr.lowercaseString;
+    
+    // 🛑 核心黑名单：屏蔽自己生成的变声文件
+    if ([lowerStr containsString:@"temp_trimmed"] || [lowerStr containsString:@"dyyy_"] || [lowerStr containsString:@"record"] || [lowerStr containsString:@"upload"] || [lowerStr containsString:@"draft"]) {
+        return;
+    }
+    
+    // 过滤掉静态图片
+    if ([lowerStr hasSuffix:@".jpg"] || [lowerStr hasSuffix:@".png"] || [lowerStr hasSuffix:@".webp"]) return;
+
+    if ([lowerStr hasPrefix:@"http"]) {
+        // 放宽网络拦截条件，哪怕抖音伪装成 mp4，只要带 cache 或 audio 就抓
+        if ([lowerStr containsString:@"audio"] || [lowerStr containsString:@"cache"] || [lowerStr containsString:@"comment"]) {
+            g_lastCapturedAudioPath = urlStr;
+            g_isLastCapturedNetwork = YES;
+        }
+    } else if (localPath && ([lowerStr containsString:@"cache"] || [lowerStr containsString:@"attachment"] || [lowerStr containsString:@"comment"] || [lowerStr containsString:@"im_audio"])) {
+        g_lastCapturedAudioPath = localPath; 
+        g_isLastCapturedNetwork = NO;
+    }
+}
+
+%hook TTVideoEngine
+- (void)setDirectPlayURL:(NSString *)URLString {
+    if (URLString) DYYY_CheckAndCaptureAudio([NSURL URLWithString:URLString], @"TTEngine_Net");
+    %orig;
+}
+- (void)setLocalURL:(NSString *)URLString {
+    if (URLString) DYYY_CheckAndCaptureAudio([NSURL fileURLWithPath:URLString], @"TTEngine_Loc");
+    %orig;
+}
+%end
+
+%hook AWEAudioPlayer
+- (instancetype)initWithURL:(NSURL *)URL {
+    DYYY_CheckAndCaptureAudio(URL, @"AWEAudio");
+    return %orig;
+}
+%end
+
+%hook AVPlayerItem
+- (instancetype)initWithURL:(NSURL *)URL {
+    DYYY_CheckAndCaptureAudio(URL, @"AVPlayerItem");
+    return %orig;
+}
++ (instancetype)playerItemWithURL:(NSURL *)URL {
+    DYYY_CheckAndCaptureAudio(URL, @"AVPlayerItem");
+    return %orig;
+}
+%end
+
+%hook AVAudioPlayer
+- (id)initWithContentsOfURL:(NSURL *)url error:(NSError **)outError {
+    DYYY_CheckAndCaptureAudio(url, @"AVAudioPlayer");
+    return %orig;
+}
+%end
+
+
+// ================= 2. 暴力捞针 (专治评论区各种不服) =================
 static NSString *DYYY_FindLatestMediaCache() {
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *cacheDir = [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES) firstObject];
-    NSString *tmpDir = NSTemporaryDirectory();
-    
-    // 抖音可能存放二进制数据流的核心缓存池
     NSArray *searchPaths = @[
-        cacheDir,
         [cacheDir stringByAppendingPathComponent:@"AWEAudioCache"],
-        [cacheDir stringByAppendingPathComponent:@"KSCache"],
         [cacheDir stringByAppendingPathComponent:@"aweme_audio_cache"],
         [cacheDir stringByAppendingPathComponent:@"VideoCache"],
-        tmpDir
+        NSTemporaryDirectory()
     ];
     
     NSString *latestFile = nil;
     NSDate *latestDate = [NSDate distantPast];
     
-    // 暴力遍历所有目录，揪出最新落盘的数据
     for (NSString *dir in searchPaths) {
         if (![fm fileExistsAtPath:dir]) continue;
-        
-        // ⚠️ 修复了Theos编译报错：使用字符串字面量代替系统常量
-        NSDirectoryEnumerator *enumerator = [fm enumeratorAtURL:[NSURL fileURLWithPath:dir]
-                                     includingPropertiesForKeys:@[@"NSURLModificationDateKey", @"NSURLFileSizeKey"]
-                                                        options:NSDirectoryEnumerationSkipsHiddenFiles
-                                                   errorHandler:nil];
-        
+        NSDirectoryEnumerator *enumerator = [fm enumeratorAtURL:[NSURL fileURLWithPath:dir] includingPropertiesForKeys:@[@"NSURLModificationDateKey", @"NSURLFileSizeKey"] options:NSDirectoryEnumerationSkipsHiddenFiles errorHandler:nil];
         for (NSURL *fileURL in enumerator) {
             NSString *fullPath = fileURL.path;
+            if ([fullPath containsString:@"dyyy"] || [fullPath containsString:@"sqlite"] || [fullPath hasSuffix:@".log"] || [fullPath hasSuffix:@".jpg"]) continue;
             
-            // 🛡️ 绝对黑名单：排除我们自己的变声文件、系统日志、数据库和图片
-            if ([fullPath containsString:@"dyyy"] || [fullPath containsString:@"sqlite"] || 
-                [fullPath hasSuffix:@".log"] || [fullPath containsString:@"record"] ||
-                [fullPath hasSuffix:@".jpg"] || [fullPath hasSuffix:@".png"]) {
-                continue;
-            }
+            NSDate *modDate; [fileURL getResourceValue:&modDate forKey:@"NSURLModificationDateKey" error:nil];
+            NSNumber *fileSize; [fileURL getResourceValue:&fileSize forKey:@"NSURLFileSizeKey" error:nil];
             
-            NSDate *modDate;
-            [fileURL getResourceValue:&modDate forKey:@"NSURLModificationDateKey" error:nil];
-            
-            NSNumber *fileSize;
-            [fileURL getResourceValue:&fileSize forKey:@"NSURLFileSizeKey" error:nil];
-            
-            // 🎯 核心筛选：语音数据流的大小通常在 2KB 到 3MB 之间
-            if (fileSize.integerValue > 2000 && fileSize.integerValue < 3000000) {
+            if (fileSize.integerValue > 2000 && fileSize.integerValue < 5000000) { // 放宽到 5MB
                 if ([modDate compare:latestDate] == NSOrderedDescending) {
                     latestDate = modDate;
                     latestFile = fullPath;
@@ -1597,87 +1641,83 @@ static NSString *DYYY_FindLatestMediaCache() {
             }
         }
     }
-    
-    // ⏳ 如果找到的数据包是在最近 10 秒内生成的，那 99.9% 就是你刚才听到的评论语音！
-    if (latestFile && [[NSDate date] timeIntervalSinceDate:latestDate] < 10.0) {
-        return latestFile;
-    }
+    if (latestFile && [[NSDate date] timeIntervalSinceDate:latestDate] < 10.0) return latestFile;
     return nil;
 }
 
-// --- 🎯 拦截纯二进制数据流写入 (补齐所有的 NSData 方法) ---
-%hook NSData
-- (BOOL)writeToFile:(NSString *)path atomically:(BOOL)useAuxiliaryFile {
-    if ([path.lowercaseString containsString:@"audio"] || [path.lowercaseString containsString:@"cache"]) {
-        g_lastCapturedDataPath = path;
-    }
-    return %orig;
-}
-
-- (BOOL)writeToFile:(NSString *)path options:(NSDataWritingOptions)writeOptionsMask error:(NSError **)errorPtr {
-    if ([path.lowercaseString containsString:@"audio"] || [path.lowercaseString containsString:@"cache"]) {
-        g_lastCapturedDataPath = path;
-    }
-    return %orig;
-}
-
-- (BOOL)writeToURL:(NSURL *)url options:(NSDataWritingOptions)writeOptionsMask error:(NSError **)errorPtr {
-    if ([url.path.lowercaseString containsString:@"audio"] || [url.path.lowercaseString containsString:@"cache"]) {
-        g_lastCapturedDataPath = url.path;
-    }
-    return %orig;
-}
-%end
-
-
 // ==========================================
-// 📱 摇一摇触发导出 (无视路径，直接抽离)
+// 📱 摇一摇触发 (强制变装 .m4a 保证 UI 显示)
 // ==========================================
 %hook UIWindow
 - (void)motionEnded:(UIEventSubtype)motion withEvent:(UIEvent *)event {
     if (motion == UIEventSubtypeMotionShake) {
         
-        // 1. 优先使用“暴力捞针法”找最近 10 秒内播放的数据流
-        NSString *targetDataPath = DYYY_FindLatestMediaCache();
+        NSString *targetDir = [[DYYYAudioManager sharedManager] voiceDirectory];
+        // ⚠️ 核心修复：不管抓到的是什么牛鬼蛇神，全部强行加上 .m4a 后缀！防止音频助手列表过滤！
+        NSString *fileName = [NSString stringWithFormat:@"提取语音_%ld.m4a", (long)[[NSDate date] timeIntervalSince1970]];
+        NSString *targetPath = [targetDir stringByAppendingPathComponent:fileName];
         
-        // 2. 如果没捞到，再用 NSData 抓到的兜底
-        if (!targetDataPath && g_lastCapturedDataPath && [[NSFileManager defaultManager] fileExistsAtPath:g_lastCapturedDataPath]) {
-            targetDataPath = g_lastCapturedDataPath;
-        }
-        
-        if (targetDataPath) {
-            NSString *targetDir = [[DYYYAudioManager sharedManager] voiceDirectory];
-            
-            // 抖音的缓存数据流通常没有后缀，强行赋予 aac 方便系统播放器解码
-            NSString *ext = @"aac"; 
-            if (targetDataPath.pathExtension.length > 0 && ![targetDataPath.pathExtension containsString:@"tmp"]) {
-                ext = targetDataPath.pathExtension.lowercaseString;
-            }
-            
-            NSString *fileName = [NSString stringWithFormat:@"提取流_%ld.%@", (long)[[NSDate date] timeIntervalSince1970], ext];
-            NSString *finalSavePath = [targetDir stringByAppendingPathComponent:fileName];
-            
+        // 优先检查雷达是否抓到了本地文件 (私信)
+        if (!g_isLastCapturedNetwork && g_lastCapturedAudioPath && [[NSFileManager defaultManager] fileExistsAtPath:g_lastCapturedAudioPath]) {
             NSError *error = nil;
-            [[NSFileManager defaultManager] copyItemAtPath:targetDataPath toPath:finalSavePath error:&error];
-            
+            [[NSFileManager defaultManager] copyItemAtPath:g_lastCapturedAudioPath toPath:targetPath error:&error];
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (!error) {
-                    [DYYYUtils showToast:@"✅ 摇一摇：音频数据流已强制提取至助手！"];
-                    g_lastCapturedDataPath = nil; // 重置
+                    [DYYYUtils showToast:@"✅ 私信提取成功！快去助手查看"];
+                    g_lastCapturedAudioPath = nil;
                 } else {
-                    [DYYYUtils showToast:@"❌ 数据流提取失败，请检查权限"];
+                    [DYYYUtils showToast:@"❌ 私信提取失败"];
                 }
             });
-            
-        } else {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [DYYYUtils showToast:@"⚠️ 未检测到有效数据流\n请点开语音播放后立刻摇一摇"];
+            %orig;
+            return;
+        }
+        
+        // 如果雷达抓到了网络文件 (评论区 HTTP)
+        if (g_isLastCapturedNetwork && g_lastCapturedAudioPath) {
+            dispatch_async(dispatch_get_main_queue(), ^{ [DYYYUtils showToast:@"⏳ 正在下载网络语音..."]; });
+            NSString *downloadUrl = g_lastCapturedAudioPath; 
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                NSData *audioData = [NSData dataWithContentsOfURL:[NSURL URLWithString:downloadUrl]];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (audioData && [audioData writeToFile:targetPath atomically:YES]) {
+                        [DYYYUtils showToast:@"✅ 评论语音已下载至助手！"];
+                        g_lastCapturedAudioPath = nil;
+                    } else {
+                        // 网络下载失败，降级使用物理捞针法
+                        goto BRUTE_FORCE_FALLBACK;
+                    }
+                });
             });
+            %orig;
+            return;
+        }
+
+BRUTE_FORCE_FALLBACK:
+        // 如果雷达瞎了，启用底层数据捞针
+        {
+            NSString *cachePath = DYYY_FindLatestMediaCache();
+            if (cachePath) {
+                NSError *error = nil;
+                [[NSFileManager defaultManager] copyItemAtPath:cachePath toPath:targetPath error:&error];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (!error) {
+                        [DYYYUtils showToast:@"✅ 底层缓存强制提取成功！(m4a)"];
+                    } else {
+                        [DYYYUtils showToast:@"❌ 底层提取失败"];
+                    }
+                });
+            } else {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [DYYYUtils showToast:@"⚠️ 未捕捉到语音\n请重新点开播放后再摇一摇"];
+                });
+            }
         }
     }
     %orig;
 }
 %end
+
 
 
 
