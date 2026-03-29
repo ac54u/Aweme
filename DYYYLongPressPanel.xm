@@ -1678,8 +1678,6 @@ static NSData *DYYY_WrapPCMToWAV(void *pcmData, size_t dataSize) {
 
 
 
-
-
 %ctor {
     if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYUserAgreementAccepted"]) {
         %init;
