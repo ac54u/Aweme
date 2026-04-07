@@ -8,7 +8,7 @@ static BOOL _isAudioAssistantActive = NO;
 // 🚀 新增：实现状态管理
 + (void)setAudioAssistantActive:(BOOL)active {
     _isAudioAssistantActive = active;
-    NSLog(@"[DYYYVoiceChanger] 🎛️ 音频助手状态已切换为: %@", active ? @"开启 (免检模式)" : @"关闭 (拦截模式)");
+    NSLog(@"[DYYYVoiceChanger] 🎛️ 音频助手状态已切换为: %@", active ? @"开启 (强制洗澡瘦身模式)" : @"关闭 (拦截模式)");
 }
 
 + (BOOL)isAudioAssistantActive {
@@ -18,31 +18,26 @@ static BOOL _isAudioAssistantActive = NO;
 // --- 供 Hook 调用的同步方法 ---
 + (BOOL)processAudioFileFrom:(NSString *)srcPath to:(NSString *)dstPath {
     
-    // 🛡️ 核心防御：如果音频助手正在使用，直接跳过变音，返回 NO 让外部走原逻辑！
-    if ([self isAudioAssistantActive]) {
-        NSLog(@"[DYYYVoiceChanger] 🎧 音频助手正在工作，放行原声文件！");
-        return NO; 
-    }
-
     NSInteger voiceType = [[NSUserDefaults standardUserDefaults] integerForKey:@"DYYYVoiceChangerType"];
     
-    // 如果是 0 (正常原声)，也跳过
-    if (voiceType == 0) {
-        NSLog(@"[DYYYVoiceChanger] 当前设置为正常原声，跳过渲染。");
-        return NO; 
+    // 🚨 核心防御升级：即使是音频助手，也【绝对不能】return NO！
+    // 必须让所有文件都往下走，去执行底层的强制单声道和采样率转换。
+    if ([self isAudioAssistantActive]) {
+        NSLog(@"[DYYYVoiceChanger] 🎧 音频助手正在工作，放行原声文件并执行强制格式瘦身！");
+        voiceType = 0; // 0 代表不加特效，只做格式压缩
     }
     
-    // ... 下面的变音渲染代码保持原样不变 ...
+    // 注意：如果是 0 (正常原声)，同样不 return NO，强行压制格式！
+    
     __block BOOL processSuccess = NO;
     dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
     
-    NSLog(@"[DYYYVoiceChanger] ⏳ 开始处理音频，应用特效类型: %ld", (long)voiceType);
-    // ... [self processAudioAtPath:...]
+    NSLog(@"[DYYYVoiceChanger] ⏳ 开始处理音频，当前模式 (0为纯净格式转换): %ld", (long)voiceType);
     
-    // 🚀 这里改为传入 voiceType
+    // 🚀 核心处理模块
     [self processAudioAtPath:srcPath withVoiceType:voiceType completion:^(NSString *outputPath, NSError *error) {
         if (error || !outputPath) {
-            NSLog(@"[DYYYVoiceChanger] ❌ 变音核心处理失败: %@", error.localizedDescription);
+            NSLog(@"[DYYYVoiceChanger] ❌ 音频核心处理失败: %@", error.localizedDescription);
             processSuccess = NO;
         } else {
             NSFileManager *fm = [NSFileManager defaultManager];
@@ -53,7 +48,7 @@ static BOOL _isAudioAssistantActive = NO;
             processSuccess = [fm moveItemAtPath:outputPath toPath:dstPath error:&moveError];
             
             if (processSuccess) {
-                NSLog(@"[DYYYVoiceChanger] ✅ 变声完成并成功就位: %@", dstPath);
+                NSLog(@"[DYYYVoiceChanger] ✅ 音频处理并瘦身完成，成功就位: %@", dstPath);
             }
         }
         dispatch_semaphore_signal(semaphore);
@@ -63,7 +58,7 @@ static BOOL _isAudioAssistantActive = NO;
     return processSuccess;
 }
 
-// --- 核心变声方法 (支持多效果节点串联) ---
+// --- 核心变声及格式化方法 (支持多效果节点串联) ---
 + (void)processAudioAtPath:(NSString *)inputPath
              withVoiceType:(NSInteger)voiceType
                 completion:(void(^)(NSString *outputPath, NSError *error))completion {
@@ -79,7 +74,7 @@ static BOOL _isAudioAssistantActive = NO;
         AVAudioPlayerNode *playerNode = [[AVAudioPlayerNode alloc] init];
         [engine attachNode:playerNode];
         
-        // 🚀 核心升级：用于按顺序存放音频效果节点的数组
+        // 🚀 用于按顺序存放音频效果节点的数组
         NSMutableArray<AVAudioNode *> *audioNodes = [NSMutableArray array];
         
         // -----------------------------------------------------
@@ -130,7 +125,7 @@ static BOOL _isAudioAssistantActive = NO;
         }
         
         // -----------------------------------------------------
-        // 🔗 动态连接所有节点
+        // 🔗 动态连接所有节点 (如果没有特效，则直接连接混音器)
         // -----------------------------------------------------
         AVAudioFormat *format = sourceFile.processingFormat;
         AVAudioNode *previousNode = playerNode;
@@ -161,16 +156,17 @@ static BOOL _isAudioAssistantActive = NO;
         NSURL *outputURL = [NSURL fileURLWithPath:outputPath];
         
         // ==========================================
-        // 🛡️ 核心修复：强行瘦身为抖音标准的单声道参数
+        // 🛡️ 终极修复：强行瘦身为抖音标准的极简语音参数
         // ==========================================
         NSDictionary *outputSettings = @{
             AVFormatIDKey: @(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: @(44100.0), // 锁定标准采样率
-            AVNumberOfChannelsKey: @(1), // 🌟 必须为 1 (单声道)！这是解决参数不合法的核心
-            AVEncoderBitRateKey: @(64000) // 限制码率防止文件过大
+            AVSampleRateKey: @(16000.0),  // 🌟 降级至标准通讯采样率 16000Hz
+            AVNumberOfChannelsKey: @(1),  // 🌟 强行单声道 (核心防拦截)
+            AVEncoderBitRateKey: @(32000) // 🌟 压低码率控制体积
         };
         
         AVAudioFile *outputFile = [[AVAudioFile alloc] initForWriting:outputURL settings:outputSettings commonFormat:format.commonFormat interleaved:format.isInterleaved error:&error];
+        
         // 渲染循环
         AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:engine.manualRenderingFormat frameCapacity:engine.manualRenderingMaximumFrameCount];
         AVAudioFramePosition length = sourceFile.length;
