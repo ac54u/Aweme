@@ -714,23 +714,31 @@ static NSString *g_pendingReplacePath = nil;
     NSFileManager *fm = [NSFileManager defaultManager];
     if (![fm fileExistsAtPath:pendingPath]) return;
     
-    // 📢 发号施令 1：开始替换文件前，告诉变声器“我现在是音频助手，请放行！”
+    // 📢 发号施令 1：告诉变声器“我现在是音频助手，请给我执行纯净格式转换！”
     [DYYYVoiceChanger setAudioAssistantActive:YES];
     
     NSTimeInterval duration = CMTimeGetSeconds([AVURLAsset assetWithURL:[NSURL fileURLWithPath:pendingPath]].duration);
     
     if (duration <= 29.5) {
-        if ([fm fileExistsAtPath:targetPath]) [fm removeItemAtPath:targetPath error:nil];
-        [fm copyItemAtPath:pendingPath toPath:targetPath error:nil];
-        [self showCustomToast:@"✅ 语音发送替换成功！"];
+        // 🚀 核心修复：坚决不直接 Copy！必须经过格式洗澡！
+        BOOL success = [DYYYVoiceChanger processAudioFileFrom:pendingPath to:targetPath];
         
-        // 📢 发号施令 2：替换完成。延迟 1.5 秒后关闭免检，确保抖音底层已经发完这个文件
+        if (success) {
+            [self showCustomToast:@"✅ 语音瘦身且替换成功！"];
+        } else {
+            // 如果转换意外失败，再作为最后的兜底方案直接复制
+            if ([fm fileExistsAtPath:targetPath]) [fm removeItemAtPath:targetPath error:nil];
+            [fm copyItemAtPath:pendingPath toPath:targetPath error:nil];
+            [self showCustomToast:@"⚠️ 瘦身失败，已原样强制替换"];
+        }
+        
+        // 📢 发号施令 2：延迟 1.5 秒后关闭免检状态
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [DYYYVoiceChanger setAudioAssistantActive:NO];
         });
         
     } else {
-        [self showCustomToast:@"⏳ 音频过长，正在为您自动裁剪..."];
+        [self showCustomToast:@"⏳ 音频过长，正在为您自动裁剪并瘦身..."];
         
         NSString *tempTrimmedPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"temp_trimmed.m4a"];
         if ([fm fileExistsAtPath:tempTrimmedPath]) [fm removeItemAtPath:tempTrimmedPath error:nil];
@@ -741,29 +749,31 @@ static NSString *g_pendingReplacePath = nil;
         exportSession.outputFileType = AVFileTypeAppleM4A;
         exportSession.timeRange = CMTimeRangeFromTimeToTime(CMTimeMake(0, 1), CMTimeMakeWithSeconds(29.5, 600));
         
-        // ⚠️ 关键修复：移除 dispatch_async，直接在当前线程阻塞等待裁剪完成
         dispatch_semaphore_t sema = dispatch_semaphore_create(0);
         
         [exportSession exportAsynchronouslyWithCompletionHandler:^{
             dispatch_semaphore_signal(sema);
         }];
         
-        // 设置超时时间保护 (15秒)，防止意外卡死
         dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15.0 * NSEC_PER_SEC));
         dispatch_semaphore_wait(sema, timeout);
         
-        // 阻塞结束后，再执行后续的文件替换动作
         if (exportSession.status == AVAssetExportSessionStatusCompleted) {
-            if ([fm fileExistsAtPath:targetPath]) [fm removeItemAtPath:targetPath error:nil];
-            [fm copyItemAtPath:tempTrimmedPath toPath:targetPath error:nil];
-            [self showCustomToast:@"✅ 已裁剪并替换 (29s)"];
+            // 🚀 核心修复 2：裁剪后的文件同样必须送去格式洗澡！
+            BOOL success = [DYYYVoiceChanger processAudioFileFrom:tempTrimmedPath to:targetPath];
+            if (success) {
+                [self showCustomToast:@"✅ 已裁剪并洗澡瘦身 (29s)"];
+            } else {
+                if ([fm fileExistsAtPath:targetPath]) [fm removeItemAtPath:targetPath error:nil];
+                [fm copyItemAtPath:tempTrimmedPath toPath:targetPath error:nil];
+                [self showCustomToast:@"⚠️ 裁剪成功但瘦身失败，已原样替换"];
+            }
         } else {
-            [self showCustomToast:@"❌ 裁剪失败，将原样强制替换"];
-            if ([fm fileExistsAtPath:targetPath]) [fm removeItemAtPath:targetPath error:nil];
-            [fm copyItemAtPath:pendingPath toPath:targetPath error:nil];
+            [self showCustomToast:@"❌ 裁剪失败，尝试将全长原声强行瘦身替换"];
+            // 兜底：直接把超长的音频丢进洗澡机
+            [DYYYVoiceChanger processAudioFileFrom:pendingPath to:targetPath];
         }
         
-        // 📢 发号施令 3：长音频裁剪+替换完成。同样延迟 1.5 秒后关闭免检
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [DYYYVoiceChanger setAudioAssistantActive:NO];
         });
