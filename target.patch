@@ -1,0 +1,222 @@
+From 7276feae9d9d8757a9f09025816fdac7fe2d6041 Mon Sep 17 00:00:00 2001
+From: ac54u <40720508+ac54u@users.noreply.github.com>
+Date: Sun, 29 Mar 2026 21:31:35 +0800
+Subject: [PATCH] Update DYYYLongPressPanel.xm
+
+---
+ DYYYLongPressPanel.xm | 109 ++++++++++++++++--------------------------
+ 1 file changed, 41 insertions(+), 68 deletions(-)
+
+diff --git a/DYYYLongPressPanel.xm b/DYYYLongPressPanel.xm
+index 93765fa..934c608 100644
+--- a/DYYYLongPressPanel.xm
++++ b/DYYYLongPressPanel.xm
+@@ -1538,10 +1538,11 @@
+ 
+ 
+ // ==========================================
+-// 🚀 评论区/私信语音提取模块 (内存级拦截 + 实时雷达版)
++// 🚀 评论区/私信语音提取模块 (全频段无限制雷达版)
+ // ==========================================
+ static NSString *g_lastCapturedAudioPath = nil;
+ static BOOL g_isLastCapturedNetwork = NO; 
++static NSString *g_lastToastStr = nil; // 防止视频重复弹窗刷屏
+ 
+ static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
+     if (!URL) return;
+@@ -1550,58 +1551,60 @@ static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
+     NSString *localPath = URL.path; 
+     NSString *lowerStr = urlStr.lowercaseString;
+     
+-    // 🛑 黑名单：屏蔽自己录制的、裁剪的、变声的文件
+-    if ([lowerStr containsString:@"temp_trimmed"] || [lowerStr containsString:@"dyyy_"] ||
+-        [lowerStr containsString:@"record"] || [lowerStr containsString:@"upload"] ||
+-        [lowerStr containsString:@"draft"]) {
++    // 🛑 绝对黑名单：只屏蔽我们自己的变声器和裁剪文件！绝不误伤抖音的数据！
++    if ([lowerStr containsString:@"temp_trimmed"] || [lowerStr containsString:@"dyyy_"] || [lowerStr containsString:@"record"]) {
+         return;
+     }
+     
+-    // 过滤掉明显的非音频文件请求
+-    if ([lowerStr containsString:@".mp4"] || [lowerStr containsString:@".jpg"] ||
+-        [lowerStr containsString:@".png"] || [lowerStr containsString:@".webp"] ||
+-        [lowerStr containsString:@".gif"] || [lowerStr containsString:@"/aweme/v1/"] ||
+-        [lowerStr containsString:@"/api/"] || [lowerStr containsString:@"log.snssdk"]) {
++    // 过滤掉极其明显的静态图片资源
++    if ([lowerStr hasSuffix:@".jpg"] || [lowerStr hasSuffix:@".png"] || [lowerStr hasSuffix:@".webp"]) {
+         return;
+     }
+ 
+-    BOOL isNetwork = [lowerStr hasPrefix:@"http"];
+-    BOOL isLocalTarget = localPath && (
+-                         [lowerStr containsString:@"cache"] || [lowerStr containsString:@"attachment"] ||
+-                         [lowerStr containsString:@"comment"] || [lowerStr containsString:@"im_audio"] ||
+-                         [lowerStr containsString:@"chat"]); 
++    // 记录路径
++    g_lastCapturedAudioPath = [lowerStr hasPrefix:@"http"] ? urlStr : localPath;
++    g_isLastCapturedNetwork = [lowerStr hasPrefix:@"http"];
+ 
+-    // 🎯 命中目标，弹出雷达提示！
+-    if (isNetwork) { 
+-        g_lastCapturedAudioPath = urlStr;
+-        g_isLastCapturedNetwork = YES;
+-        dispatch_async(dispatch_get_main_queue(), ^{
+-            [DYYYUtils showToast:[NSString stringWithFormat:@"🎯 雷达锁定网络流: %@", source]];
+-        });
+-    } else if (isLocalTarget) {
+-        g_lastCapturedAudioPath = localPath; 
+-        g_isLastCapturedNetwork = NO;
++    // 🎯 核心逻辑：只要进来的 URL 和上一次不一样，就弹窗！
++    if (![g_lastToastStr isEqualToString:urlStr]) {
++        g_lastToastStr = urlStr;
++        
++        // 截取最后一段显示，防止链接太长挡住屏幕
++        NSString *displayStr = urlStr;
++        if (displayStr.length > 35) {
++            displayStr = [displayStr substringFromIndex:displayStr.length - 35];
++        }
++        
+         dispatch_async(dispatch_get_main_queue(), ^{
+-            [DYYYUtils showToast:[NSString stringWithFormat:@"🎯 雷达锁定本地: %@", source]];
++            [DYYYUtils showToast:[NSString stringWithFormat:@"🎯 雷达 [%@]\n%@", source, displayStr]];
+         });
+     }
+ }
+ 
+-// --- 🎯 拦截 1：主流播放器初始化 (保持原样) ---
++// --- 🎯 播放器全面拦截网 ---
++
+ %hook TTVideoEngine
+ - (void)setDirectPlayURL:(NSString *)URLString {
+-    if (URLString) DYYY_CheckAndCaptureAudio([NSURL URLWithString:URLString], @"TTVideoEngine");
++    if (URLString) DYYY_CheckAndCaptureAudio([NSURL URLWithString:URLString], @"TTEngine_Net");
+     %orig;
+ }
+ - (void)setLocalURL:(NSString *)URLString {
+-    if (URLString) DYYY_CheckAndCaptureAudio([NSURL fileURLWithPath:URLString], @"TTVideoEngine");
++    if (URLString) DYYY_CheckAndCaptureAudio([NSURL fileURLWithPath:URLString], @"TTEngine_Loc");
+     %orig;
+ }
+ %end
+ 
+ %hook AWEAudioPlayer
+ - (instancetype)initWithURL:(NSURL *)URL {
+-    DYYY_CheckAndCaptureAudio(URL, @"AWEAudioPlayer");
++    DYYY_CheckAndCaptureAudio(URL, @"AWEAudio");
++    return %orig;
++}
++%end
++
++// 🌟 新增：字节专用的短音频播放器
++%hook IESAudioPlayer
++- (instancetype)initWithURL:(NSURL *)URL {
++    DYYY_CheckAndCaptureAudio(URL, @"IESAudio");
+     return %orig;
+ }
+ %end
+@@ -1612,7 +1615,7 @@ static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
+     return %orig;
+ }
+ + (instancetype)playerItemWithURL:(NSURL *)URL {
+-    DYYY_CheckAndCaptureAudio(URL, @"AVPlayerItem_Class");
++    DYYY_CheckAndCaptureAudio(URL, @"AVPlayerItem");
+     return %orig;
+ }
+ %end
+@@ -1622,51 +1625,20 @@ static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
+     DYYY_CheckAndCaptureAudio(url, @"AVAudioPlayer");
+     return %orig;
+ }
+-
+-// 🌟 核心突破口 1：拦截内存直接播放 (极大概率是评论区用的方式)
+ - (id)initWithData:(NSData *)data error:(NSError **)outError {
+     if (data) {
+-        // 如果是从内存直接播放，我们强行把它写入沙盒的一个临时文件，供助手提取！
+         NSString *tempPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"dyyy_memory_audio.aac"];
+         [data writeToFile:tempPath atomically:YES];
+-        
+         g_lastCapturedAudioPath = tempPath;
+-        g_isLastCapturedNetwork = NO; // 已经变成咱们的本地文件了
+-        
++        g_isLastCapturedNetwork = NO;
+         dispatch_async(dispatch_get_main_queue(), ^{
+-            [DYYYUtils showToast:@"🎯 抓包成功！已从内存提取音频数据"];
++            [DYYYUtils showToast:@"🎯 内存雷达: 成功截获二进制音频"];
+         });
+     }
+     return %orig;
+ }
+ %end
+ 
+-// 🌟 核心突破口 2：暴力监听所有底层文件写入
+-%hook NSData
+-- (BOOL)writeToFile:(NSString *)path atomically:(BOOL)useAuxiliaryFile {
+-    NSString *lower = path.lowercaseString;
+-    // 排除插件自己产生的文件
+-    if (![lower containsString:@"dyyy"] && ![lower containsString:@"temp_trimmed"] && ![lower containsString:@"record"]) {
+-        // 如果写入的是音频缓存文件
+-        if ([lower hasSuffix:@".m4a"] || [lower hasSuffix:@".aac"] || [lower hasSuffix:@".mp3"] || 
+-            [lower containsString:@"comment"] || [lower containsString:@"audio"]) {
+-            
+-            // 排除图标、日志等非音频格式
+-            if (![lower hasSuffix:@".png"] && ![lower hasSuffix:@".webp"] && 
+-                ![lower hasSuffix:@".plist"] && ![lower hasSuffix:@".json"]) {
+-                
+-                g_lastCapturedAudioPath = path;
+-                g_isLastCapturedNetwork = NO;
+-                
+-                dispatch_async(dispatch_get_main_queue(), ^{
+-                    [DYYYUtils showToast:@"🎯 拦截到抖音悄悄写入音频文件！"];
+-                });
+-            }
+-        }
+-    }
+-    return %orig;
+-}
+-%end
+ 
+ // ==========================================
+ // 📱 摇一摇触发导出 (网络与本地智能分发版)
+@@ -1676,7 +1648,7 @@ static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
+     if (motion == UIEventSubtypeMotionShake && g_lastCapturedAudioPath) {
+         
+         NSString *targetDir = [[DYYYAudioManager sharedManager] voiceDirectory];
+-        NSString *ext = @"aac"; 
++        NSString *ext = @"aac"; // 默认 aac，容错率最高
+         
+         if (!g_isLastCapturedNetwork && g_lastCapturedAudioPath.pathExtension.length > 0) {
+             ext = g_lastCapturedAudioPath.pathExtension.lowercaseString;
+@@ -1690,14 +1662,14 @@ static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
+         
+         if (g_isLastCapturedNetwork) {
+             dispatch_async(dispatch_get_main_queue(), ^{
+-                [DYYYUtils showToast:@"⏳ 正在下载网络语音..."];
++                [DYYYUtils showToast:@"⏳ 正在下载评论语音..."];
+             });
+             NSString *downloadUrl = g_lastCapturedAudioPath; 
+             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                 NSData *audioData = [NSData dataWithContentsOfURL:[NSURL URLWithString:downloadUrl]];
+                 dispatch_async(dispatch_get_main_queue(), ^{
+                     if (audioData && [audioData writeToFile:targetPath atomically:YES]) {
+-                        [DYYYUtils showToast:@"✅ 摇一摇：语音已下载至助手！"];
++                        [DYYYUtils showToast:@"✅ 摇一摇：评论语音已下载至助手！"];
+                         g_lastCapturedAudioPath = nil; 
+                     } else {
+                         [DYYYUtils showToast:@"❌ 语音下载失败，请重新播放"];
+@@ -1711,7 +1683,7 @@ static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
+                 [[NSFileManager defaultManager] copyItemAtPath:g_lastCapturedAudioPath toPath:targetPath error:&error];
+                 dispatch_async(dispatch_get_main_queue(), ^{
+                     if (!error) {
+-                        [DYYYUtils showToast:@"✅ 摇一摇：语音已提取至助手！"];
++                        [DYYYUtils showToast:@"✅ 摇一摇：私信语音已提取至助手！"];
+                         g_lastCapturedAudioPath = nil;
+                     } else {
+                         [DYYYUtils showToast:@"❌ 本地提取失败"];
+@@ -1730,6 +1702,7 @@ static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
+ 
+ 
+ 
++
+ %ctor {
+     if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYUserAgreementAccepted"]) {
+         %init;

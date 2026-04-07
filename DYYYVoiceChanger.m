@@ -160,15 +160,17 @@ static BOOL _isAudioAssistantActive = NO;
         NSString *outputPath = [NSTemporaryDirectory() stringByAppendingPathComponent:outFileName];
         NSURL *outputURL = [NSURL fileURLWithPath:outputPath];
         
+        // ==========================================
+        // 🛡️ 核心修复：强行瘦身为抖音标准的单声道参数
+        // ==========================================
         NSDictionary *outputSettings = @{
             AVFormatIDKey: @(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: @(format.sampleRate),
-            AVNumberOfChannelsKey: @(format.channelCount),
-            AVEncoderBitRateKey: @(96000)
+            AVSampleRateKey: @(44100.0), // 锁定标准采样率
+            AVNumberOfChannelsKey: @(1), // 🌟 必须为 1 (单声道)！这是解决参数不合法的核心
+            AVEncoderBitRateKey: @(64000) // 限制码率防止文件过大
         };
         
         AVAudioFile *outputFile = [[AVAudioFile alloc] initForWriting:outputURL settings:outputSettings commonFormat:format.commonFormat interleaved:format.isInterleaved error:&error];
-        
         // 渲染循环
         AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:engine.manualRenderingFormat frameCapacity:engine.manualRenderingMaximumFrameCount];
         AVAudioFramePosition length = sourceFile.length;

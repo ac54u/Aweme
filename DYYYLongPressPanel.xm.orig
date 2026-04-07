@@ -1598,7 +1598,7 @@ static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
     return %orig;
 }
 + (instancetype)playerItemWithURL:(NSURL *)URL {
-    DYYY_CheckAndCaptureAudio(URL, @"AVPlayerItem");
+    DYYY_CheckAndCaptureAudio(URL, @"AVPlayerItem_Class");
     return %orig;
 }
 %end
@@ -1698,7 +1698,6 @@ static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
     %orig;
 }
 %end
-
 
 
 %ctor {
