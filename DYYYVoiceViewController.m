@@ -5,9 +5,16 @@
 #import <objc/runtime.h>
 #import "DYYYVoiceChanger.h"
 
-// 🔥 终极性能优化：新增全局静态内存变量，极速读取，0 CPU 消耗，防止高频拦截导致抖音被系统强杀
+// 🔥 终极性能优化：新增全局静态内存变量，极速读取，0 CPU 消耗
 static BOOL g_isArmed = NO;
 static NSString *g_pendingReplacePath = nil;
+
+// 提前声明 Helper
+@interface DYYYVoiceHelper : NSObject
++ (void)prepareAudioForUpload:(NSString *)sourcePath toPath:(NSString *)targetPath completion:(void(^)(BOOL))completion;
++ (void)fastReplace:(NSString *)targetPath;
++ (void)showCustomToast:(NSString *)msg;
+@end
 
 // 新增 UIDocumentPickerDelegate 协议以支持文件导入
 @interface DYYYVoiceViewController () <UITableViewDelegate, UITableViewDataSource, UITextFieldDelegate, UIDocumentPickerDelegate>
@@ -63,7 +70,6 @@ static NSString *g_pendingReplacePath = nil;
     [closeBtn addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
     [self.headerView addSubview:closeBtn];
     
-    // 依次排列：编辑、导入、新建文件夹
     UIButton *editBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     editBtn.frame = CGRectMake(self.view.bounds.size.width - 130, 15, 30, 30);
     [editBtn setImage:[UIImage systemImageNamed:@"checkmark.circle"] forState:UIControlStateNormal];
@@ -71,7 +77,6 @@ static NSString *g_pendingReplacePath = nil;
     [editBtn addTarget:self action:@selector(editTapped:) forControlEvents:UIControlEventTouchUpInside];
     [self.headerView addSubview:editBtn];
     
-    // 新增：导入音频按钮
     UIButton *importBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     importBtn.frame = CGRectMake(self.view.bounds.size.width - 90, 15, 30, 30);
     [importBtn setImage:[UIImage systemImageNamed:@"square.and.arrow.down"] forState:UIControlStateNormal];
@@ -265,12 +270,10 @@ static NSString *g_pendingReplacePath = nil;
     [self presentViewController:alert animated:YES completion:nil];
 }
 
-// 新增：获取当前工作目录的安全方法
 - (NSString *)getCurrentFolderPath {
     if (self.originalDataList.count > 0) {
         return [self.originalDataList.firstObject[@"path"] stringByDeletingLastPathComponent];
     } else {
-        // 空目录时临时创建一个文件夹获取路径后删除
         [[DYYYAudioManager sharedManager] createFolderNamed:@"DYYY_TMP_DIR" atSubPath:self.subPath];
         NSArray *tempList = [[DYYYAudioManager sharedManager] getContentsAtSubPath:self.subPath];
         NSString *folderPath = nil;
@@ -285,15 +288,12 @@ static NSString *g_pendingReplacePath = nil;
     }
 }
 
-// 新增：点击导入音频
 - (void)importAudioTapped {
-    // 允许导入所有音频类型
     UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.audio"] inMode:UIDocumentPickerModeImport];
     picker.delegate = self;
     [self presentViewController:picker animated:YES completion:nil];
 }
 
-// 新增：文件选择器回调处理
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     NSURL *fileURL = urls.firstObject;
     if (!fileURL) return;
@@ -410,6 +410,7 @@ static NSString *g_pendingReplacePath = nil;
     [self.tableView reloadData];
 }
 
+// 🔥 核心大招：提前洗澡 + 完美装填子弹
 - (void)sendTapped:(UIButton *)sender {
     CGPoint buttonPosition = [sender convertPoint:CGPointZero toView:self.tableView];
     NSIndexPath *indexPath = [self.tableView indexPathForRowAtPoint:buttonPosition];
@@ -418,22 +419,36 @@ static NSString *g_pendingReplacePath = nil;
     NSDictionary *item = self.dataList[indexPath.row];
     NSString *path = item[@"path"];
     
-    // 🔥 核心修改：同步写入全局内存变量，极速读取，完全不占 CPU
-    g_isArmed = YES;
-    g_pendingReplacePath = path;
+    // 1. 弹出正在处理的进度框
+    UIAlertController *loadingAlert = [UIAlertController alertControllerWithTitle:@"正在洗澡瘦身" message:@"正在为您转换为抖音标准格式，请稍候..." preferredStyle:UIAlertControllerStyleAlert];
+    [self presentViewController:loadingAlert animated:YES completion:nil];
     
-    // 依然保留 NSUserDefaults 仅用于持久化（供其他可能的文件访问），但我们自己的 Hook 不再频繁读取它
-    [[NSUserDefaults standardUserDefaults] setObject:path forKey:@"DYYY_PendingReplacePath"];
-    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"DYYY_IsArmed"];
-    [[NSUserDefaults standardUserDefaults] synchronize];
+    NSString *readyPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"DYYY_ReadyToUpload.m4a"];
     
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"音频装填成功！" 
-                                                                   message:@"请返回【评论区】或【私信框】\n长按麦克风录音 1 秒即可自动发送该音频！" 
-                                                            preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"好的" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        [self dismissViewControllerAnimated:YES completion:nil];
-    }]];
-    [self presentViewController:alert animated:YES completion:nil];
+    // 2. 在进入抖音前，提前将音频洗澡、压缩、裁剪完毕！
+    [DYYYVoiceHelper prepareAudioForUpload:path toPath:readyPath completion:^(BOOL success) {
+        [loadingAlert dismissViewControllerAnimated:YES completion:^{
+            if (success) {
+                // 3. 完美子弹已上膛！
+                g_isArmed = YES;
+                g_pendingReplacePath = readyPath;
+                
+                [[NSUserDefaults standardUserDefaults] setObject:readyPath forKey:@"DYYY_PendingReplacePath"];
+                [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"DYYY_IsArmed"];
+                [[NSUserDefaults standardUserDefaults] synchronize];
+                
+                UIAlertController *successAlert = [UIAlertController alertControllerWithTitle:@"✅ 弹药装填完毕！"
+                                                                                      message:@"音频已提前完成所有格式伪装！\n\n请立刻返回【评论区/私信】，长按麦克风随便录 1 秒后松手，即可秒发！"
+                                                                               preferredStyle:UIAlertControllerStyleAlert];
+                [successAlert addAction:[UIAlertAction actionWithTitle:@"去发送" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+                    [self dismissViewControllerAnimated:YES completion:nil];
+                }]];
+                [self presentViewController:successAlert animated:YES completion:nil];
+            } else {
+                [DYYYVoiceHelper showCustomToast:@"❌ 转换失败，源音频过于奇葩"];
+            }
+        }];
+    }];
 }
 
 #pragma mark - TableView Delegate & DataSource
@@ -668,22 +683,17 @@ static NSString *g_pendingReplacePath = nil;
 }
 @end
 
-// =======================================================
-// 语音替换引擎 (原生 Runtime 实现，极速优化版 ⚡️)
-// =======================================================
-@interface DYYYVoiceHelper : NSObject
-+ (void)processAndReplace:(NSString *)targetPath;
-+ (void)showCustomToast:(NSString *)msg;
-@end
 
+// =======================================================
+// 语音替换引擎 (终极子弹上膛秒替版 ⚡️)
+// =======================================================
 @implementation DYYYVoiceHelper
 + (void)showCustomToast:(NSString *)msg {
     dispatch_async(dispatch_get_main_queue(), ^{
         UIWindow *win = [UIApplication sharedApplication].windows.firstObject;
         if (!win) return;
-        
         CGFloat toastY = 200; 
-        UILabel *toast = [[UILabel alloc] initWithFrame:CGRectMake(win.bounds.size.width/2 - 100, toastY, 200, 40)];
+        UILabel *toast = [[UILabel alloc] initWithFrame:CGRectMake(win.bounds.size.width/2 - 125, toastY, 250, 40)];
         toast.backgroundColor = [UIColor colorWithRed:0.1 green:0.8 blue:0.3 alpha:0.95]; 
         toast.textColor = [UIColor whiteColor];
         toast.text = msg;
@@ -691,9 +701,7 @@ static NSString *g_pendingReplacePath = nil;
         toast.layer.cornerRadius = 20;
         toast.clipsToBounds = YES;
         toast.font = [UIFont boldSystemFontOfSize:14];
-        
         [win addSubview:toast];
-        
         toast.alpha = 0;
         [UIView animateWithDuration:0.3 animations:^{ toast.alpha = 1; } completion:^(BOOL f){
             [UIView animateWithDuration:0.3 delay:2.0 options:0 animations:^{ toast.alpha = 0; } completion:^(BOOL f){ [toast removeFromSuperview]; }];
@@ -701,89 +709,73 @@ static NSString *g_pendingReplacePath = nil;
     });
 }
 
-+ (void)processAndReplace:(NSString *)targetPath {
-    NSString *pendingPath = g_pendingReplacePath;
-    if (!g_isArmed || !pendingPath || pendingPath.length == 0) return;
+// 提前在后台耗时处理音频（裁剪+转单声道）
++ (void)prepareAudioForUpload:(NSString *)sourcePath toPath:(NSString *)targetPath completion:(void(^)(BOOL))completion {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSTimeInterval duration = CMTimeGetSeconds([AVURLAsset assetWithURL:[NSURL fileURLWithPath:sourcePath]].duration);
+        
+        [DYYYVoiceChanger setAudioAssistantActive:YES];
+        
+        BOOL processSuccess = NO;
+        if (duration > 29.5) {
+            NSString *tempTrimmedPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"temp_trimmed_pre.m4a"];
+            if ([fm fileExistsAtPath:tempTrimmedPath]) [fm removeItemAtPath:tempTrimmedPath error:nil];
+            
+            AVAsset *asset = [AVAsset assetWithURL:[NSURL fileURLWithPath:sourcePath]];
+            AVAssetExportSession *exportSession = [AVAssetExportSession exportSessionWithAsset:asset presetName:AVAssetExportPresetAppleM4A];
+            exportSession.outputURL = [NSURL fileURLWithPath:tempTrimmedPath];
+            exportSession.outputFileType = AVFileTypeAppleM4A;
+            exportSession.timeRange = CMTimeRangeFromTimeToTime(CMTimeMake(0, 1), CMTimeMakeWithSeconds(29.5, 600));
+            
+            dispatch_semaphore_t sema = dispatch_semaphore_create(0);
+            [exportSession exportAsynchronouslyWithCompletionHandler:^{
+                dispatch_semaphore_signal(sema);
+            }];
+            dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC));
+            
+            if (exportSession.status == AVAssetExportSessionStatusCompleted) {
+                processSuccess = [DYYYVoiceChanger processAudioFileFrom:tempTrimmedPath to:targetPath];
+            } else {
+                processSuccess = [DYYYVoiceChanger processAudioFileFrom:sourcePath to:targetPath];
+            }
+        } else {
+            processSuccess = [DYYYVoiceChanger processAudioFileFrom:sourcePath to:targetPath];
+        }
+        
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [DYYYVoiceChanger setAudioAssistantActive:NO];
+        });
+        
+        if (completion) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                completion(processSuccess);
+            });
+        }
+    });
+}
+
+// 抖音发语音瞬间触发的“极速替换”（耗时仅 0.001 秒，绝不卡顿阻塞）
++ (void)fastReplace:(NSString *)targetPath {
+    if (!g_isArmed || !g_pendingReplacePath) return;
+    
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if ([fm fileExistsAtPath:g_pendingReplacePath]) {
+        if ([fm fileExistsAtPath:targetPath]) [fm removeItemAtPath:targetPath error:nil];
+        [fm copyItemAtPath:g_pendingReplacePath toPath:targetPath error:nil];
+        [self showCustomToast:@"⚡️ 极速伪装秒发成功！"];
+    }
     
     g_isArmed = NO;
     g_pendingReplacePath = nil;
-    
     [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"DYYY_IsArmed"];
     [[NSUserDefaults standardUserDefaults] synchronize];
-
-    NSFileManager *fm = [NSFileManager defaultManager];
-    if (![fm fileExistsAtPath:pendingPath]) return;
-    
-    // 📢 发号施令 1：告诉变声器“我现在是音频助手，请给我执行纯净格式转换！”
-    [DYYYVoiceChanger setAudioAssistantActive:YES];
-    
-    NSTimeInterval duration = CMTimeGetSeconds([AVURLAsset assetWithURL:[NSURL fileURLWithPath:pendingPath]].duration);
-    
-    if (duration <= 29.5) {
-        // 🚀 核心修复：坚决不直接 Copy！必须经过格式洗澡！
-        BOOL success = [DYYYVoiceChanger processAudioFileFrom:pendingPath to:targetPath];
-        
-        if (success) {
-            [self showCustomToast:@"✅ 语音瘦身且替换成功！"];
-        } else {
-            // 如果转换意外失败，再作为最后的兜底方案直接复制
-            if ([fm fileExistsAtPath:targetPath]) [fm removeItemAtPath:targetPath error:nil];
-            [fm copyItemAtPath:pendingPath toPath:targetPath error:nil];
-            [self showCustomToast:@"⚠️ 瘦身失败，已原样强制替换"];
-        }
-        
-        // 📢 发号施令 2：延迟 1.5 秒后关闭免检状态
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [DYYYVoiceChanger setAudioAssistantActive:NO];
-        });
-        
-    } else {
-        [self showCustomToast:@"⏳ 音频过长，正在为您自动裁剪并瘦身..."];
-        
-        NSString *tempTrimmedPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"temp_trimmed.m4a"];
-        if ([fm fileExistsAtPath:tempTrimmedPath]) [fm removeItemAtPath:tempTrimmedPath error:nil];
-        
-        AVAsset *asset = [AVAsset assetWithURL:[NSURL fileURLWithPath:pendingPath]];
-        AVAssetExportSession *exportSession = [AVAssetExportSession exportSessionWithAsset:asset presetName:AVAssetExportPresetAppleM4A];
-        exportSession.outputURL = [NSURL fileURLWithPath:tempTrimmedPath];
-        exportSession.outputFileType = AVFileTypeAppleM4A;
-        exportSession.timeRange = CMTimeRangeFromTimeToTime(CMTimeMake(0, 1), CMTimeMakeWithSeconds(29.5, 600));
-        
-        dispatch_semaphore_t sema = dispatch_semaphore_create(0);
-        
-        [exportSession exportAsynchronouslyWithCompletionHandler:^{
-            dispatch_semaphore_signal(sema);
-        }];
-        
-        dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15.0 * NSEC_PER_SEC));
-        dispatch_semaphore_wait(sema, timeout);
-        
-        if (exportSession.status == AVAssetExportSessionStatusCompleted) {
-            // 🚀 核心修复 2：裁剪后的文件同样必须送去格式洗澡！
-            BOOL success = [DYYYVoiceChanger processAudioFileFrom:tempTrimmedPath to:targetPath];
-            if (success) {
-                [self showCustomToast:@"✅ 已裁剪并洗澡瘦身 (29s)"];
-            } else {
-                if ([fm fileExistsAtPath:targetPath]) [fm removeItemAtPath:targetPath error:nil];
-                [fm copyItemAtPath:tempTrimmedPath toPath:targetPath error:nil];
-                [self showCustomToast:@"⚠️ 裁剪成功但瘦身失败，已原样替换"];
-            }
-        } else {
-            [self showCustomToast:@"❌ 裁剪失败，尝试将全长原声强行瘦身替换"];
-            // 兜底：直接把超长的音频丢进洗澡机
-            [DYYYVoiceChanger processAudioFileFrom:pendingPath to:targetPath];
-        }
-        
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [DYYYVoiceChanger setAudioAssistantActive:NO];
-        });
-    }
 }
 @end
 
+
 static void (*original_AWEIMMessageBaseViewController_sendMessage)(id, SEL, id);
 static void replaced_AWEIMMessageBaseViewController_sendMessage(id self, SEL _cmd, id msg) {
-    // 🔥 核心修改：改用内存变量
     if (g_isArmed && g_pendingReplacePath) {
         NSString *msgDesc = [NSString stringWithFormat:@"%@", msg];
         @try {
@@ -802,7 +794,8 @@ static void replaced_AWEIMMessageBaseViewController_sendMessage(id self, SEL _cm
             if ([fm fileExistsAtPath:path isDirectory:&isDir] && !isDir) {
                 NSString *ext = path.pathExtension.lowercaseString;
                 if ([ext isEqualToString:@"aac"] || [ext isEqualToString:@"m4a"] || [ext isEqualToString:@"wav"] || [ext isEqualToString:@"caf"] || [path.lowercaseString containsString:@"audio"] || [path.lowercaseString containsString:@"voice"]) {
-                    [DYYYVoiceHelper processAndReplace:path];
+                    // 🚀 秒级替换，闪电发射
+                    [DYYYVoiceHelper fastReplace:path];
                     break;
                 }
             }
@@ -818,12 +811,12 @@ static void replaced_AVAudioRecorder_stop(id self, SEL _cmd) {
     if (original_AVAudioRecorder_stop) {
         original_AVAudioRecorder_stop(self, _cmd);
     }
-    // 🔥 核心修改：改用内存变量
     if (g_isArmed) {
         if ([self respondsToSelector:@selector(url)]) {
             NSURL *url = [self performSelector:@selector(url)];
             if (url && url.path) {
-                [DYYYVoiceHelper processAndReplace:url.path];
+                // 🚀 秒级替换，闪电发射
+                [DYYYVoiceHelper fastReplace:url.path];
             }
         }
     }
@@ -836,18 +829,16 @@ static BOOL replaced_NSFileManager_moveItemAtPath(NSFileManager* self, SEL _cmd,
         result = original_NSFileManager_moveItemAtPath(self, _cmd, src, dst, err);
     }
     
-    // 🔥 极其致命的高频函数！现在彻底抛弃 NSUserDefaults，改用极速内存变量 `g_isArmed`。
-    // 这将 100% 根治抖音发热和被系统 Jetsam (Error 142) 强杀的问题！
     if (result && g_isArmed && dst) {
         NSString *ext = dst.pathExtension.lowercaseString;
         if ([ext isEqualToString:@"m4a"] || [ext isEqualToString:@"aac"] || [ext isEqualToString:@"wav"] || [ext isEqualToString:@"mp3"] || [dst.lowercaseString containsString:@"audio"] || [dst.lowercaseString containsString:@"voice"]) {
-            [DYYYVoiceHelper processAndReplace:dst];
+            // 🚀 秒级替换，闪电发射
+            [DYYYVoiceHelper fastReplace:dst];
         }
     }
     return result;
 }
 
-// 注册 Hook
 __attribute__((constructor)) static void DYYYVoiceHookInit() {
     Class msgClass = NSClassFromString(@"AWEIMMessageBaseViewController");
     if (msgClass) {
@@ -876,4 +867,3 @@ __attribute__((constructor)) static void DYYYVoiceHookInit() {
         }
     }
 }
-
