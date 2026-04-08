@@ -18,16 +18,13 @@ static BOOL _isAudioAssistantActive = NO;
 + (BOOL)processAudioFileFrom:(NSString *)srcPath to:(NSString *)dstPath {
     NSInteger voiceType = [[NSUserDefaults standardUserDefaults] integerForKey:@"DYYYVoiceChangerType"];
     
-    // 🚨 即使是音频助手，也【绝对不能】return NO！强行走格式洗澡！
     if ([self isAudioAssistantActive]) {
         NSLog(@"[DYYYVoiceChanger] 🎧 音频助手正在工作，放行原声文件并执行强制格式瘦身！");
-        voiceType = 0; // 0 代表不加特效，只做格式压缩
+        voiceType = 0; 
     }
     
     __block BOOL processSuccess = NO;
     dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-    
-    NSLog(@"[DYYYVoiceChanger] ⏳ 开始处理音频，当前模式 (0为纯净格式转换): %ld", (long)voiceType);
     
     [self processAudioAtPath:srcPath withVoiceType:voiceType completion:^(NSString *outputPath, NSError *error) {
         if (error || !outputPath) {
@@ -35,35 +32,27 @@ static BOOL _isAudioAssistantActive = NO;
             processSuccess = NO;
         } else {
             NSFileManager *fm = [NSFileManager defaultManager];
-            if ([fm fileExistsAtPath:dstPath]) {
-                [fm removeItemAtPath:dstPath error:nil];
-            }
+            if ([fm fileExistsAtPath:dstPath]) [fm removeItemAtPath:dstPath error:nil];
             NSError *moveError = nil;
             processSuccess = [fm moveItemAtPath:outputPath toPath:dstPath error:&moveError];
-            
-            if (processSuccess) {
-                NSLog(@"[DYYYVoiceChanger] ✅ 音频处理并瘦身完成，成功就位: %@", dstPath);
-            }
         }
         dispatch_semaphore_signal(semaphore);
     }];
     
-    dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC));
+    // 🚨 核心修复 2：解除变声渲染超时封印！彻底等待大文件转换完毕！
+    dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
     return processSuccess;
 }
 
-// ==========================================
-// 🛡️ 终极无敌兜底模块：只要引擎敢崩溃，我立刻用原生导出器强行榨汁！
-// ==========================================
+// 🛡️ 终极兜底
 + (void)fallbackExportAudio:(NSURL *)sourceURL completion:(void(^)(NSString *outputPath, NSError *error))completion {
     NSLog(@"[DYYYVoiceChanger] ⚠️ 触发终极兜底转码机制！");
     NSString *outFileName = [NSString stringWithFormat:@"dyyy_fallback_%@.m4a", [[NSUUID UUID] UUIDString]];
     NSString *outputPath = [NSTemporaryDirectory() stringByAppendingPathComponent:outFileName];
-    NSURL *outputURL = [NSURL fileURLWithPath:outputPath];
     
     AVAsset *asset = [AVAsset assetWithURL:sourceURL];
     AVAssetExportSession *exportSession = [AVAssetExportSession exportSessionWithAsset:asset presetName:AVAssetExportPresetAppleM4A];
-    exportSession.outputURL = outputURL;
+    exportSession.outputURL = [NSURL fileURLWithPath:outputPath];
     exportSession.outputFileType = AVFileTypeAppleM4A;
     
     [exportSession exportAsynchronouslyWithCompletionHandler:^{
@@ -86,7 +75,6 @@ static BOOL _isAudioAssistantActive = NO;
         
         AVAudioFile *sourceFile = [[AVAudioFile alloc] initForReading:sourceURL error:&error];
         if (error || !sourceFile) { 
-            // 文件奇葩，引擎读不了？直接走兜底强转！
             [self fallbackExportAudio:sourceURL completion:completion];
             return; 
         }
@@ -97,33 +85,26 @@ static BOOL _isAudioAssistantActive = NO;
         
         NSMutableArray<AVAudioNode *> *audioNodes = [NSMutableArray array];
         
-        // 🎛️ 特效组装
         if (voiceType == 1) {
             AVAudioUnitTimePitch *pitch = [[AVAudioUnitTimePitch alloc] init];
-            pitch.pitch = 1000.0;
-            [engine attachNode:pitch]; [audioNodes addObject:pitch];
+            pitch.pitch = 1000.0; [engine attachNode:pitch]; [audioNodes addObject:pitch];
         } else if (voiceType == 2) {
             AVAudioUnitTimePitch *pitch = [[AVAudioUnitTimePitch alloc] init];
-            pitch.pitch = -800.0;
-            [engine attachNode:pitch]; [audioNodes addObject:pitch];
+            pitch.pitch = -800.0; [engine attachNode:pitch]; [audioNodes addObject:pitch];
         } else if (voiceType == 3) {
             AVAudioUnitReverb *reverb = [[AVAudioUnitReverb alloc] init];
             [reverb loadFactoryPreset:AVAudioUnitReverbPresetLargeHall];
-            reverb.wetDryMix = 50.0;
-            [engine attachNode:reverb]; [audioNodes addObject:reverb];
+            reverb.wetDryMix = 50.0; [engine attachNode:reverb]; [audioNodes addObject:reverb];
         } else if (voiceType == 4) {
             AVAudioUnitDistortion *distortion = [[AVAudioUnitDistortion alloc] init];
             [distortion loadFactoryPreset:AVAudioUnitDistortionPresetSpeechRadioTower];
-            distortion.wetDryMix = 70.0;
-            [engine attachNode:distortion]; [audioNodes addObject:distortion];
+            distortion.wetDryMix = 70.0; [engine attachNode:distortion]; [audioNodes addObject:distortion];
         } else if (voiceType == 5) {
             AVAudioUnitTimePitch *pitch = [[AVAudioUnitTimePitch alloc] init];
-            pitch.pitch = -1200.0;
-            [engine attachNode:pitch]; [audioNodes addObject:pitch];
+            pitch.pitch = -1200.0; [engine attachNode:pitch]; [audioNodes addObject:pitch];
             AVAudioUnitReverb *reverb = [[AVAudioUnitReverb alloc] init];
             [reverb loadFactoryPreset:AVAudioUnitReverbPresetMediumChamber];
-            reverb.wetDryMix = 40.0;
-            [engine attachNode:reverb]; [audioNodes addObject:reverb];
+            reverb.wetDryMix = 40.0; [engine attachNode:reverb]; [audioNodes addObject:reverb];
         }
         
         AVAudioFormat *sourceFormat = sourceFile.processingFormat;
@@ -134,14 +115,12 @@ static BOOL _isAudioAssistantActive = NO;
             previousNode = node;
         }
         [engine connect:previousNode to:engine.mainMixerNode format:sourceFormat];
-        // ==========================================
-        // 🌟 终极核心突破：统一全链路格式！焊死 16000Hz 单声道
-        // ==========================================
-        // 1. 强制引擎的输出模具为：标准 PCM, 16000Hz, 单声道
-        AVAudioFormat *monoFormat = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:16000.0 channels:1];
+        
+        // 🚨 核心修复 3：引擎渲染保持原采样率，防止崩溃！只强压成单声道。
+        AVAudioFormat *monoBufferFormat = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sourceFormat.sampleRate channels:1];
         
         [engine enableManualRenderingMode:AVAudioEngineManualRenderingModeOffline
-                                   format:monoFormat
+                                   format:monoBufferFormat
                         maximumFrameCount:4096
                                     error:&error];
         if (error) { [self fallbackExportAudio:sourceURL completion:completion]; return; }
@@ -156,23 +135,22 @@ static BOOL _isAudioAssistantActive = NO;
         NSString *outputPath = [NSTemporaryDirectory() stringByAppendingPathComponent:outFileName];
         NSURL *outputURL = [NSURL fileURLWithPath:outputPath];
         
-        // 2. 强制写入文件的格式为：AAC, 16000Hz, 单声道
-        // 这里必须和上面的 monoFormat 保持绝对一致，引擎才不会崩溃！
+        // 🌟 文件输出端：强行要求降维打击到 16000Hz
         NSDictionary *outputSettings = @{
             AVFormatIDKey: @(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: @(16000.0), 
+            AVSampleRateKey: @(16000.0),  
             AVNumberOfChannelsKey: @(1), 
             AVEncoderBitRateKey: @(32000) 
         };
         
-        // 🚨 丢掉所有花里胡哨的参数，直接用最稳健的初始化方法
         AVAudioFile *outputFile = [[AVAudioFile alloc] initForWriting:outputURL 
                                                              settings:outputSettings 
+                                                         commonFormat:monoBufferFormat.commonFormat 
+                                                          interleaved:monoBufferFormat.isInterleaved 
                                                                 error:&error];
         if (error || !outputFile) { [self fallbackExportAudio:sourceURL completion:completion]; return; }
         
-        AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:monoFormat frameCapacity:engine.manualRenderingMaximumFrameCount];
-
+        AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:monoBufferFormat frameCapacity:engine.manualRenderingMaximumFrameCount];
         
         while (YES) {
             AVAudioFrameCount framesToRender = buffer.frameCapacity;
@@ -182,9 +160,9 @@ static BOOL _isAudioAssistantActive = NO;
                 [outputFile writeFromBuffer:buffer error:&error];
                 if (error) break;
             } else if (status == AVAudioEngineManualRenderingStatusInsufficientDataFromInputNode) {
-                break; // 正常结束
+                break; 
             } else if (status == AVAudioEngineManualRenderingStatusError) {
-                break; // 引擎报错
+                break; 
             }
         }
         
@@ -192,7 +170,6 @@ static BOOL _isAudioAssistantActive = NO;
         [engine stop];
         
         if (error) {
-            // 最后一道防线：渲染失败也走兜底！
             [self fallbackExportAudio:sourceURL completion:completion];
         } else {
             if (completion) completion(outputPath, nil);
