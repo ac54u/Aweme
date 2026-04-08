@@ -47,7 +47,7 @@ static BOOL _isAudioAssistantActive = NO;
     return processSuccess;
 }
 
-// 💥 真正的绝杀：不管你什么格式，全部打碎重铸！完美避开时间戳崩溃！
+// 💥 真正的终极绝杀：无视任何高质量/高保真/长音频，时空截断 + 柔和重铸！
 + (BOOL)hardTranscodeAudioFrom:(NSString *)srcPath to:(NSString *)dstPath {
     NSURL *srcURL = [NSURL fileURLWithPath:srcPath];
     NSURL *dstURL = [NSURL fileURLWithPath:dstPath];
@@ -57,27 +57,27 @@ static BOOL _isAudioAssistantActive = NO;
     AVAsset *asset = [AVAsset assetWithURL:srcURL];
     NSError *error = nil;
     
-    // 1. 读取器：强行读取源文件
     AVAssetReader *reader = [AVAssetReader assetReaderWithAsset:asset error:&error];
     if (!reader) return NO;
+    
+    // 🌟 终极神技【时空截断】：大文件/长音频的克星！
+    // 不管文件多大，只抽取前 29.5 秒进行解码，彻底告别内存爆炸和漫长等待！
+    CMTime duration = asset.duration;
+    if (CMTimeGetSeconds(duration) > 29.5) {
+        reader.timeRange = CMTimeRangeMake(kCMTimeZero, CMTimeMakeWithSeconds(29.5, 600));
+    }
     
     AVAssetTrack *audioTrack = [[asset tracksWithMediaType:AVMediaTypeAudio] firstObject];
     if (!audioTrack) return NO;
     
-    // 🚨 核心防御 1：强制要求读取器输出最干干净净的 16000Hz 单声道 PCM 波形！
+    // 🌟 核心防御 1【顺水推舟】：绝不在读取端强行降频！
+    // 让它输出最原始、最自然的 PCM 波形，哪怕它是 192kHz 的怪物！
     NSDictionary *readerSettings = @{
-        AVFormatIDKey: @(kAudioFormatLinearPCM),
-        AVSampleRateKey: @(16000.0),
-        AVNumberOfChannelsKey: @(1),
-        AVLinearPCMBitDepthKey: @(16),
-        AVLinearPCMIsNonInterleaved: @(NO),
-        AVLinearPCMIsFloatKey: @(NO),
-        AVLinearPCMIsBigEndianKey: @(NO)
+        AVFormatIDKey: @(kAudioFormatLinearPCM)
     };
     AVAssetReaderTrackOutput *readerOutput = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:audioTrack outputSettings:readerSettings];
     [reader addOutput:readerOutput];
     
-    // 2. 写入器：铸造纯正的抖音标准 M4A
     AVAssetWriter *writer = [AVAssetWriter assetWriterWithURL:dstURL fileType:AVFileTypeAppleM4A error:&error];
     if (!writer) return NO;
     
@@ -86,7 +86,7 @@ static BOOL _isAudioAssistantActive = NO;
     channelLayout.mChannelLayoutTag = kAudioChannelLayoutTag_Mono;
     NSData *channelLayoutData = [NSData dataWithBytes:&channelLayout length:sizeof(AudioChannelLayout)];
     
-    // 强制 16000Hz, 单声道, AAC 编码
+    // 🌟 核心防御 2【降维打击】：在写入端进行降频，苹果底层会自动调用最优的软件重采样器
     NSDictionary *writerSettings = @{
         AVFormatIDKey: @(kAudioFormatMPEG4AAC),
         AVSampleRateKey: @(16000.0),
@@ -97,69 +97,56 @@ static BOOL _isAudioAssistantActive = NO;
     
     AVAssetWriterInput *writerInput = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeAudio outputSettings:writerSettings];
     writerInput.expectsMediaDataInRealTime = NO;
-    [writer addInput:writerInput];
+    if ([writer canAddInput:writerInput]) {
+        [writer addInput:writerInput];
+    } else {
+        return NO;
+    }
     
     [reader startReading];
     [writer startWriting];
     
-    // 🚨 彻底删掉原来的 [writer startSessionAtSourceTime:kCMTimeZero];
-    
-    dispatch_queue_t queue = dispatch_queue_create("com.dyyy.transcode", NULL);
     dispatch_semaphore_t sema = dispatch_semaphore_create(0);
     __block BOOL success = NO;
-    __block BOOL isFirstBuffer = YES; // 用于精准捕获真实第一帧时间
     
-    // 3. 流水线开启：安全闭环，滴水不漏
-    [writerInput requestMediaDataWhenReadyOnQueue:queue usingBlock:^{
-        while (writerInput.isReadyForMoreMediaData) {
-            CMSampleBufferRef sampleBuffer = [readerOutput copyNextSampleBuffer];
-            if (sampleBuffer) {
-                CMTime pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
-                
-                // 🚨 核心防御 2：获取音频真实的第一帧时间来启动引擎！负数也能完美包容！
-                if (isFirstBuffer) {
-                    [writer startSessionAtSourceTime:pts];
-                    isFirstBuffer = NO;
-                }
-                
-                // ✂️ 完美裁剪：超过 29.5 秒立刻安全下车！
-                if (CMTimeGetSeconds(pts) > 29.5) {
-                    CFRelease(sampleBuffer);
-                    [writerInput markAsFinished];
-                    [writer finishWritingWithCompletionHandler:^{
-                        success = (writer.status == AVAssetWriterStatusCompleted);
-                        dispatch_semaphore_signal(sema);
-                    }];
-                    return; // 🚨 核心防御 3：必须立刻 return，绝不能让系统复用闭包！
-                }
-                
-                @try {
-                    BOOL appendSuccess = [writerInput appendSampleBuffer:sampleBuffer];
-                    if (!appendSuccess) {
-                        CFRelease(sampleBuffer);
-                        [writerInput markAsFinished];
-                        [writer finishWritingWithCompletionHandler:^{
-                            success = NO;
-                            dispatch_semaphore_signal(sema);
-                        }];
-                        return; // 必须 return
+    // 🌟 核心防御 3【稳健搬运工】：用最原始的 while 循环替代闭包，杜绝回调错乱
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+        BOOL isFirstBuffer = YES;
+        
+        while (reader.status == AVAssetReaderStatusReading) {
+            if (writerInput.isReadyForMoreMediaData) {
+                CMSampleBufferRef buffer = [readerOutput copyNextSampleBuffer];
+                if (buffer) {
+                    if (isFirstBuffer) {
+                        // 精准捕获真实第一帧时间，完美包容负数时间戳！
+                        CMTime pts = CMSampleBufferGetPresentationTimeStamp(buffer);
+                        [writer startSessionAtSourceTime:pts];
+                        isFirstBuffer = NO;
                     }
-                } @catch (NSException *e) {
-                    // 终极保护：即使苹果底层再次发疯，只抓取异常，绝不带崩抖音！
-                    NSLog(@"[DYYYVoiceChanger] ❌ 强转异常被拦截: %@", e.reason);
+                    [writerInput appendSampleBuffer:buffer];
+                    CFRelease(buffer);
+                } else {
+                    // 读取完毕 (可能是读到了 29.5 秒的截断处)
+                    [writerInput markAsFinished];
+                    break;
                 }
-                
-                CFRelease(sampleBuffer);
             } else {
-                [writerInput markAsFinished];
-                [writer finishWritingWithCompletionHandler:^{
-                    success = (writer.status == AVAssetWriterStatusCompleted);
-                    dispatch_semaphore_signal(sema);
-                }];
-                return; // 必须 return
+                // 写入器消化太慢，休息 5 毫秒防 CPU 飙升
+                [NSThread sleepForTimeInterval:0.005];
             }
         }
-    }];
+        
+        // 扫尾工作
+        if (reader.status == AVAssetReaderStatusCompleted && !isFirstBuffer) {
+            [writer finishWritingWithCompletionHandler:^{
+                success = (writer.status == AVAssetWriterStatusCompleted);
+                dispatch_semaphore_signal(sema);
+            }];
+        } else {
+            [writer cancelWriting];
+            dispatch_semaphore_signal(sema);
+        }
+    });
     
     dispatch_semaphore_wait(sema, DISPATCH_TIME_FOREVER);
     return success;
