@@ -1,5 +1,4 @@
 #import "DYYYVoiceChanger.h"
-#import <UIKit/UIKit.h>
 
 static BOOL _isAudioAssistantActive = NO;
 
@@ -7,6 +6,7 @@ static BOOL _isAudioAssistantActive = NO;
 
 + (void)setAudioAssistantActive:(BOOL)active {
     _isAudioAssistantActive = active;
+    NSLog(@"[DYYYVoiceChanger] 🎛️ 音频助手状态: %@", active ? @"极速提纯模式" : @"拦截模式");
 }
 
 + (BOOL)isAudioAssistantActive {
@@ -16,6 +16,7 @@ static BOOL _isAudioAssistantActive = NO;
 + (BOOL)processAudioFileFrom:(NSString *)srcPath to:(NSString *)dstPath {
     NSInteger voiceType = [[NSUserDefaults standardUserDefaults] integerForKey:@"DYYYVoiceChangerType"];
     
+    // 音频助手发来的，强制进入 0 号极速提纯通道
     if ([self isAudioAssistantActive]) {
         voiceType = 0; 
     }
@@ -23,19 +24,19 @@ static BOOL _isAudioAssistantActive = NO;
     NSFileManager *fm = [NSFileManager defaultManager];
     
     if (voiceType == 0) {
-        // 🌊 瀑布流第一层：严格解码 (针对标准 M4A/MP4 极速处理)
+        // 🌊 第一层：严格解码 (带自动重采样机制)
         if ([self hardTranscodeAudioFrom:srcPath to:dstPath]) {
             return YES;
         }
         
-        // 🌊 瀑布流第二层：智能嗅探引擎！(照妖镜，专门对付假后缀、MP3伪装文件)
+        // 🌊 第二层：智能嗅探引擎
         NSLog(@"[DYYYVoiceChanger] ⚠️ 严格解码失败，启动智能嗅探引擎提纯...");
         if ([fm fileExistsAtPath:dstPath]) [fm removeItemAtPath:dstPath error:nil];
         if ([self engineTranscodeAudioFrom:srcPath to:dstPath]) {
             return YES;
         }
         
-        // 🌊 瀑布流第三层：原生导出器兜底
+        // 🌊 第三层：原生兜底
         NSLog(@"[DYYYVoiceChanger] ⚠️ 嗅探引擎也失败，启动原生兜底...");
         if ([fm fileExistsAtPath:dstPath]) [fm removeItemAtPath:dstPath error:nil];
         __block BOOL exportSuccess = NO;
@@ -65,75 +66,8 @@ static BOOL _isAudioAssistantActive = NO;
 }
 
 // ==========================================
-// 🛡️ 第二层神技：智能嗅探提纯机 (无视假后缀，精准裁剪 29.5s)
+// 🛡️ 第一层：严格提纯机 (修复了变声和变速 BUG！)
 // ==========================================
-+ (BOOL)engineTranscodeAudioFrom:(NSString *)inputPath to:(NSString *)outputPath {
-    NSURL *sourceURL = [NSURL fileURLWithPath:inputPath];
-    NSError *error = nil;
-    
-    // AVAudioFile 拥有嗅探能力，无视假后缀
-    AVAudioFile *sourceFile = [[AVAudioFile alloc] initForReading:sourceURL error:&error];
-    if (!sourceFile) return NO;
-    
-    AVAudioEngine *engine = [[AVAudioEngine alloc] init];
-    AVAudioPlayerNode *playerNode = [[AVAudioPlayerNode alloc] init];
-    [engine attachNode:playerNode];
-    [engine connect:playerNode to:engine.mainMixerNode format:sourceFile.processingFormat];
-    
-    AVAudioFormat *monoBufferFormat = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sourceFile.processingFormat.sampleRate channels:1];
-    
-    [engine enableManualRenderingMode:AVAudioEngineManualRenderingModeOffline format:monoBufferFormat maximumFrameCount:4096 error:&error];
-    if (error) return NO;
-    
-    [engine startAndReturnError:&error];
-    if (error) return NO;
-    
-    [playerNode scheduleFile:sourceFile atTime:nil completionHandler:nil];
-    [playerNode play];
-    
-    AudioChannelLayout channelLayout;
-    memset(&channelLayout, 0, sizeof(AudioChannelLayout));
-    channelLayout.mChannelLayoutTag = kAudioChannelLayoutTag_Mono;
-    NSData *channelLayoutData = [NSData dataWithBytes:&channelLayout length:sizeof(AudioChannelLayout)];
-    
-    NSDictionary *outputSettings = @{
-        AVFormatIDKey: @(kAudioFormatMPEG4AAC),
-        AVSampleRateKey: @(16000.0),
-        AVNumberOfChannelsKey: @(1),
-        AVEncoderBitRateKey: @(32000),
-        AVChannelLayoutKey: channelLayoutData
-    };
-    
-    AVAudioFile *outputFile = [[AVAudioFile alloc] initForWriting:[NSURL fileURLWithPath:outputPath] settings:outputSettings commonFormat:monoBufferFormat.commonFormat interleaved:monoBufferFormat.isInterleaved error:&error];
-    if (!outputFile) return NO;
-    
-    AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:monoBufferFormat frameCapacity:engine.manualRenderingMaximumFrameCount];
-    
-    // 精准截断：最多只取 29.5 秒！
-    AVAudioFramePosition maxLength = (AVAudioFramePosition)(29.5 * sourceFile.processingFormat.sampleRate);
-    AVAudioFramePosition targetLength = MIN(sourceFile.length, maxLength);
-    
-    BOOL success = YES;
-    while (engine.manualRenderingSampleTime < targetLength) {
-        AVAudioFrameCount framesToRender = (AVAudioFrameCount)MIN(buffer.frameCapacity, targetLength - engine.manualRenderingSampleTime);
-        AVAudioEngineManualRenderingStatus status = [engine renderOffline:framesToRender toBuffer:buffer error:&error];
-        
-        if (status == AVAudioEngineManualRenderingStatusSuccess) {
-            [outputFile writeFromBuffer:buffer error:&error];
-            if (error) { success = NO; break; }
-        } else if (status == AVAudioEngineManualRenderingStatusInsufficientDataFromInputNode) {
-            break; 
-        } else {
-            success = NO; break;
-        }
-    }
-    
-    [playerNode stop];
-    [engine stop];
-    return success;
-}
-
-// 🛡️ 第一层：严格提纯机
 + (BOOL)hardTranscodeAudioFrom:(NSString *)srcPath to:(NSString *)dstPath {
     NSURL *srcURL = [NSURL fileURLWithPath:srcPath];
     NSURL *dstURL = [NSURL fileURLWithPath:dstPath];
@@ -151,7 +85,16 @@ static BOOL _isAudioAssistantActive = NO;
     AVAssetTrack *audioTrack = [[asset tracksWithMediaType:AVMediaTypeAudio] firstObject];
     if (!audioTrack) return NO;
     
-    NSDictionary *readerSettings = @{ AVFormatIDKey: @(kAudioFormatLinearPCM) };
+    // 🚨 核心修复 1：强制读取器自动完成 44100Hz 和 单声道的重采样！绝不让音频被拉长拉慢！
+    NSDictionary *readerSettings = @{ 
+        AVFormatIDKey: @(kAudioFormatLinearPCM),
+        AVSampleRateKey: @(44100.0),
+        AVNumberOfChannelsKey: @(1),
+        AVLinearPCMBitDepthKey: @(16),
+        AVLinearPCMIsNonInterleaved: @(NO),
+        AVLinearPCMIsFloatKey: @(NO),
+        AVLinearPCMIsBigEndianKey: @(NO)
+    };
     AVAssetReaderTrackOutput *readerOutput = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:audioTrack outputSettings:readerSettings];
     if (![reader canAddOutput:readerOutput]) return NO;
     [reader addOutput:readerOutput];
@@ -164,11 +107,12 @@ static BOOL _isAudioAssistantActive = NO;
     channelLayout.mChannelLayoutTag = kAudioChannelLayoutTag_Mono;
     NSData *channelLayoutData = [NSData dataWithBytes:&channelLayout length:sizeof(AudioChannelLayout)];
     
+    // 🚨 核心修复 2：写入器和读取器参数必须完美一致！
     NSDictionary *writerSettings = @{
         AVFormatIDKey: @(kAudioFormatMPEG4AAC),
-        AVSampleRateKey: @(16000.0),
+        AVSampleRateKey: @(44100.0),
         AVNumberOfChannelsKey: @(1),
-        AVEncoderBitRateKey: @(32000),
+        AVEncoderBitRateKey: @(64000),
         AVChannelLayoutKey: channelLayoutData
     };
     
@@ -222,6 +166,73 @@ static BOOL _isAudioAssistantActive = NO;
     return success;
 }
 
+// ==========================================
+// 🛡️ 第二层：智能嗅探提纯机 (同样焊死 44100Hz)
+// ==========================================
++ (BOOL)engineTranscodeAudioFrom:(NSString *)inputPath to:(NSString *)outputPath {
+    NSURL *sourceURL = [NSURL fileURLWithPath:inputPath];
+    NSError *error = nil;
+    
+    AVAudioFile *sourceFile = [[AVAudioFile alloc] initForReading:sourceURL error:&error];
+    if (!sourceFile) return NO;
+    
+    AVAudioEngine *engine = [[AVAudioEngine alloc] init];
+    AVAudioPlayerNode *playerNode = [[AVAudioPlayerNode alloc] init];
+    [engine attachNode:playerNode];
+    [engine connect:playerNode to:engine.mainMixerNode format:sourceFile.processingFormat];
+    
+    // 🚨 强制引擎混合器输出 44100Hz 单声道
+    AVAudioFormat *monoBufferFormat = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:44100.0 channels:1];
+    [engine enableManualRenderingMode:AVAudioEngineManualRenderingModeOffline format:monoBufferFormat maximumFrameCount:4096 error:&error];
+    if (error) return NO;
+    
+    [engine startAndReturnError:&error];
+    if (error) return NO;
+    
+    [playerNode scheduleFile:sourceFile atTime:nil completionHandler:nil];
+    [playerNode play];
+    
+    AudioChannelLayout channelLayout;
+    memset(&channelLayout, 0, sizeof(AudioChannelLayout));
+    channelLayout.mChannelLayoutTag = kAudioChannelLayoutTag_Mono;
+    NSData *channelLayoutData = [NSData dataWithBytes:&channelLayout length:sizeof(AudioChannelLayout)];
+    
+    NSDictionary *outputSettings = @{
+        AVFormatIDKey: @(kAudioFormatMPEG4AAC),
+        AVSampleRateKey: @(44100.0),
+        AVNumberOfChannelsKey: @(1),
+        AVEncoderBitRateKey: @(64000),
+        AVChannelLayoutKey: channelLayoutData
+    };
+    
+    AVAudioFile *outputFile = [[AVAudioFile alloc] initForWriting:[NSURL fileURLWithPath:outputPath] settings:outputSettings commonFormat:monoBufferFormat.commonFormat interleaved:monoBufferFormat.isInterleaved error:&error];
+    if (!outputFile) return NO;
+    
+    AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:monoBufferFormat frameCapacity:engine.manualRenderingMaximumFrameCount];
+    
+    AVAudioFramePosition maxLength = (AVAudioFramePosition)(29.5 * monoBufferFormat.sampleRate);
+    AVAudioFramePosition targetLength = MIN((AVAudioFramePosition)(sourceFile.length * (44100.0 / sourceFile.processingFormat.sampleRate)), maxLength);
+    
+    BOOL success = YES;
+    while (engine.manualRenderingSampleTime < targetLength) {
+        AVAudioFrameCount framesToRender = (AVAudioFrameCount)MIN(buffer.frameCapacity, targetLength - engine.manualRenderingSampleTime);
+        AVAudioEngineManualRenderingStatus status = [engine renderOffline:framesToRender toBuffer:buffer error:&error];
+        
+        if (status == AVAudioEngineManualRenderingStatusSuccess) {
+            [outputFile writeFromBuffer:buffer error:&error];
+            if (error) { success = NO; break; }
+        } else if (status == AVAudioEngineManualRenderingStatusInsufficientDataFromInputNode) {
+            break; 
+        } else {
+            success = NO; break;
+        }
+    }
+    
+    [playerNode stop];
+    [engine stop];
+    return success;
+}
+
 // 🛡️ 第三层：原生兜底
 + (void)fallbackExportAudio:(NSURL *)sourceURL to:(NSString *)dstPath completion:(void(^)(BOOL))completion {
     AVAsset *asset = [AVAsset assetWithURL:sourceURL];
@@ -236,7 +247,7 @@ static BOOL _isAudioAssistantActive = NO;
     }];
 }
 
-// --- 变声特效渲染器 (无改动) ---
+// --- 变声特效渲染器 (暂不修改) ---
 + (void)processAudioAtPath:(NSString *)inputPath withVoiceType:(NSInteger)voiceType completion:(void(^)(NSString *outputPath, NSError *error))completion {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
         NSURL *sourceURL = [NSURL fileURLWithPath:inputPath];
@@ -260,7 +271,8 @@ static BOOL _isAudioAssistantActive = NO;
         for (AVAudioNode *node in audioNodes) { [engine connect:previousNode to:node format:sourceFormat]; previousNode = node; }
         [engine connect:previousNode to:engine.mainMixerNode format:sourceFormat];
         
-        AVAudioFormat *monoBufferFormat = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sourceFormat.sampleRate channels:1];
+        // 特效模式同样焊死 44100Hz 单声道
+        AVAudioFormat *monoBufferFormat = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:44100.0 channels:1];
         [engine enableManualRenderingMode:AVAudioEngineManualRenderingModeOffline format:monoBufferFormat maximumFrameCount:4096 error:&error];
         if (error) { if(completion) completion(nil, error); return; }
         
@@ -273,18 +285,14 @@ static BOOL _isAudioAssistantActive = NO;
         NSString *outFileName = [NSString stringWithFormat:@"dyyy_fx_%@.m4a", [[NSUUID UUID] UUIDString]];
         NSString *outputPath = [NSTemporaryDirectory() stringByAppendingPathComponent:outFileName];
         
-        NSDictionary *outputSettings = @{ AVFormatIDKey: @(kAudioFormatMPEG4AAC), AVSampleRateKey: @(16000.0), AVNumberOfChannelsKey: @(1), AVEncoderBitRateKey: @(32000) };
+        NSDictionary *outputSettings = @{ AVFormatIDKey: @(kAudioFormatMPEG4AAC), AVSampleRateKey: @(44100.0), AVNumberOfChannelsKey: @(1), AVEncoderBitRateKey: @(64000) };
         AVAudioFile *outputFile = [[AVAudioFile alloc] initForWriting:[NSURL fileURLWithPath:outputPath] settings:outputSettings commonFormat:monoBufferFormat.commonFormat interleaved:monoBufferFormat.isInterleaved error:&error];
         if (error || !outputFile) { if(completion) completion(nil, error); return; }
         
         AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:monoBufferFormat frameCapacity:engine.manualRenderingMaximumFrameCount];
         
-        AVAudioFramePosition maxLength = (AVAudioFramePosition)(29.5 * sourceFile.processingFormat.sampleRate);
-        AVAudioFramePosition targetLength = MIN(sourceFile.length, maxLength);
-        
-        while (engine.manualRenderingSampleTime < targetLength) {
-            AVAudioFrameCount framesToRender = (AVAudioFrameCount)MIN(buffer.frameCapacity, targetLength - engine.manualRenderingSampleTime);
-            AVAudioEngineManualRenderingStatus status = [engine renderOffline:framesToRender toBuffer:buffer error:&error];
+        while (YES) {
+            AVAudioEngineManualRenderingStatus status = [engine renderOffline:buffer.frameCapacity toBuffer:buffer error:&error];
             if (status == AVAudioEngineManualRenderingStatusSuccess) {
                 [outputFile writeFromBuffer:buffer error:&error];
                 if (error) break;
