@@ -630,14 +630,55 @@ static NSString *g_pendingReplacePath = nil;
     deleteAction.image = [UIImage systemImageNamed:@"trash.fill"];
     deleteAction.backgroundColor = [UIColor systemRedColor];
     
-    UIContextualAction *shareAction = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal title:nil handler:^(UIContextualAction * _Nonnull action, __kindof UIView * _Nonnull sourceView, void (^ _Nonnull completionHandler)(BOOL)) {
-        NSURL *fileURL = [NSURL fileURLWithPath:path];
-        UIActivityViewController *activityVC = [[UIActivityViewController alloc] initWithActivityItems:@[fileURL] applicationActivities:nil];
-        if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
-            activityVC.popoverPresentationController.sourceView = sourceView;
-        }
-        [self presentViewController:activityVC animated:YES completion:nil];
-        completionHandler(YES);
+UIContextualAction *shareAction = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal title:nil handler:^(UIContextualAction * _Nonnull action, __kindof UIView * _Nonnull sourceView, void (^ _Nonnull completionHandler)(BOOL)) {
+        
+        // 1. 弹出加载框，防止大文件处理时卡顿
+        UIAlertController *loadingAlert = [UIAlertController alertControllerWithTitle:@"处理中" message:@"正在为您转换为系统兼容格式..." preferredStyle:UIAlertControllerStyleAlert];
+        [self presentViewController:loadingAlert animated:YES completion:nil];
+        
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+            NSString *cleanFileName = [NSString stringWithFormat:@"%@_标准版.m4a", [item[@"name"] stringByDeletingPathExtension]];
+            NSString *cleanPath = [NSTemporaryDirectory() stringByAppendingPathComponent:cleanFileName];
+            
+            NSFileManager *fm = [NSFileManager defaultManager];
+            if ([fm fileExistsAtPath:cleanPath]) [fm removeItemAtPath:cleanPath error:nil];
+            
+            // 2. 尝试用系统自带导出器提纯为真 M4A（全长保留，不剪裁）
+            AVAsset *asset = [AVAsset assetWithURL:[NSURL fileURLWithPath:path]];
+            AVAssetExportSession *exportSession = [AVAssetExportSession exportSessionWithAsset:asset presetName:AVAssetExportPresetAppleM4A];
+            exportSession.outputURL = [NSURL fileURLWithPath:cleanPath];
+            exportSession.outputFileType = AVFileTypeAppleM4A;
+            
+            dispatch_semaphore_t sema = dispatch_semaphore_create(0);
+            [exportSession exportAsynchronouslyWithCompletionHandler:^{
+                dispatch_semaphore_signal(sema);
+            }];
+            dispatch_semaphore_wait(sema, DISPATCH_TIME_FOREVER);
+            
+            NSString *finalExportPath = path;
+            if (exportSession.status == AVAssetExportSessionStatusCompleted) {
+                finalExportPath = cleanPath; // 转换成功，使用洗澡后的纯正版！
+            } else {
+                // 3. 终极兜底：如果转码失败（说明是奇葩伪装格式），直接暴力改后缀为 .mp3
+                NSString *mp3Path = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"%@_兼容版.mp3", [item[@"name"] stringByDeletingPathExtension]]];
+                if ([fm fileExistsAtPath:mp3Path]) [fm removeItemAtPath:mp3Path error:nil];
+                [fm copyItemAtPath:path toPath:mp3Path error:nil];
+                finalExportPath = mp3Path; // 原生播放器看到 mp3 后缀就能认了！
+            }
+            
+            // 4. 处理完毕，调起系统原生分享面板
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [loadingAlert dismissViewControllerAnimated:YES completion:^{
+                    NSURL *fileURL = [NSURL fileURLWithPath:finalExportPath];
+                    UIActivityViewController *activityVC = [[UIActivityViewController alloc] initWithActivityItems:@[fileURL] applicationActivities:nil];
+                    if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
+                        activityVC.popoverPresentationController.sourceView = sourceView;
+                    }
+                    [self presentViewController:activityVC animated:YES completion:nil];
+                    completionHandler(YES);
+                }];
+            });
+        });
     }];
     shareAction.image = [UIImage systemImageNamed:@"square.and.arrow.up.fill"];
     shareAction.backgroundColor = [UIColor colorWithRed:0.35 green:0.34 blue:0.84 alpha:1.0];
