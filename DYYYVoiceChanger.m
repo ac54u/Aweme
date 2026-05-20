@@ -94,7 +94,7 @@ static BOOL _isAudioAssistantActive = NO;
     }
 
     // 🚨 核心修复 1：强制读取器自动完成 48000Hz 重采样，防止音频拉伸
-    // 32-bit float 中间层，给 AAC 编码器提供更高精度原料
+    // 32-bit float 中间层 + 母带级重采样算法，给 AAC 编码器提供最高精度原料
     NSDictionary *readerSettings = @{
         AVFormatIDKey: @(kAudioFormatLinearPCM),
         AVSampleRateKey: @(48000.0),
@@ -102,7 +102,8 @@ static BOOL _isAudioAssistantActive = NO;
         AVLinearPCMBitDepthKey: @(32),
         AVLinearPCMIsNonInterleaved: @(NO),
         AVLinearPCMIsFloatKey: @(YES),
-        AVLinearPCMIsBigEndianKey: @(NO)
+        AVLinearPCMIsBigEndianKey: @(NO),
+        AVSampleRateConverterAlgorithmKey: AVSampleRateConverterAlgorithmMastering
     };
     AVAssetReaderTrackOutput *readerOutput = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:audioTrack outputSettings:readerSettings];
     if (![reader canAddOutput:readerOutput]) return NO;
@@ -251,18 +252,75 @@ static BOOL _isAudioAssistantActive = NO;
     return success;
 }
 
-// 🛡️ 第三层：原生兜底
+// 🛡️ 第三层：高质量兜底（AVAudioEngine 强制解码 + 完整质量参数）
 + (void)fallbackExportAudio:(NSURL *)sourceURL to:(NSString *)dstPath completion:(void(^)(BOOL))completion {
-    AVAsset *asset = [AVAsset assetWithURL:sourceURL];
-    AVAssetExportSession *exportSession = [AVAssetExportSession exportSessionWithAsset:asset presetName:AVAssetExportPresetAppleM4A];
-    exportSession.outputURL = [NSURL fileURLWithPath:dstPath];
-    exportSession.outputFileType = AVFileTypeAppleM4A;
-    if (CMTimeGetSeconds(asset.duration) > 29.5) {
-        exportSession.timeRange = CMTimeRangeFromTimeToTime(kCMTimeZero, CMTimeMakeWithSeconds(29.5, 600));
-    }
-    [exportSession exportAsynchronouslyWithCompletionHandler:^{
-        if (completion) completion(exportSession.status == AVAssetExportSessionStatusCompleted);
-    }];
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+        NSError *error = nil;
+        AVAudioFile *sourceFile = [[AVAudioFile alloc] initForReading:sourceURL error:&error];
+        if (!sourceFile) {
+            // 最终保底：系统导出器
+            AVAsset *asset = [AVAsset assetWithURL:sourceURL];
+            AVAssetExportSession *session = [AVAssetExportSession exportSessionWithAsset:asset presetName:AVAssetExportPresetAppleM4A];
+            session.outputURL = [NSURL fileURLWithPath:dstPath];
+            session.outputFileType = AVFileTypeAppleM4A;
+            if (CMTimeGetSeconds(asset.duration) > 29.5)
+                session.timeRange = CMTimeRangeFromTimeToTime(kCMTimeZero, CMTimeMakeWithSeconds(29.5, 600));
+            [session exportAsynchronouslyWithCompletionHandler:^{
+                if (completion) completion(session.status == AVAssetExportSessionStatusCompleted);
+            }];
+            return;
+        }
+
+        AVAudioChannelCount outChannels = MIN(sourceFile.processingFormat.channelCount, 2);
+        AVAudioFormat *outFormat = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:48000.0 channels:outChannels];
+
+        AVAudioEngine *engine = [[AVAudioEngine alloc] init];
+        AVAudioPlayerNode *player = [[AVAudioPlayerNode alloc] init];
+        [engine attachNode:player];
+        [engine connect:player to:engine.mainMixerNode format:sourceFile.processingFormat];
+        [engine enableManualRenderingMode:AVAudioEngineManualRenderingModeOffline format:outFormat maximumFrameCount:8192 error:&error];
+        if (error) { if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(NO); }); return; }
+        [engine startAndReturnError:&error];
+        if (error) { if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(NO); }); return; }
+
+        [player scheduleFile:sourceFile atTime:nil completionHandler:nil];
+        [player play];
+
+        AudioChannelLayout chLayout; memset(&chLayout, 0, sizeof(AudioChannelLayout));
+        chLayout.mChannelLayoutTag = (outChannels == 2) ? kAudioChannelLayoutTag_Stereo : kAudioChannelLayoutTag_Mono;
+        NSData *chLayoutData = [NSData dataWithBytes:&chLayout length:sizeof(AudioChannelLayout)];
+        NSInteger bitRate = (outChannels == 2) ? 320000 : 256000;
+
+        NSDictionary *outSettings = @{
+            AVFormatIDKey: @(kAudioFormatMPEG4AAC),
+            AVSampleRateKey: @(48000.0),
+            AVNumberOfChannelsKey: @(outChannels),
+            AVEncoderBitRateKey: @(bitRate),
+            AVEncoderBitRateStrategyKey: AVAudioBitRateStrategy_Variable,
+            AVEncoderAudioQualityKey: @(AVAudioQualityMax),
+            AVChannelLayoutKey: chLayoutData
+        };
+        AVAudioFile *outFile = [[AVAudioFile alloc] initForWriting:[NSURL fileURLWithPath:dstPath] settings:outSettings commonFormat:outFormat.commonFormat interleaved:outFormat.isInterleaved error:&error];
+        if (!outFile) { [engine stop]; if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(NO); }); return; }
+
+        AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:outFormat frameCapacity:engine.manualRenderingMaximumFrameCount];
+        AVAudioFramePosition maxFrames = (AVAudioFramePosition)(29.5 * outFormat.sampleRate);
+        AVAudioFramePosition targetFrames = MIN((AVAudioFramePosition)(sourceFile.length * (48000.0 / sourceFile.processingFormat.sampleRate)), maxFrames);
+
+        BOOL success = YES;
+        while (engine.manualRenderingSampleTime < targetFrames) {
+            AVAudioFrameCount toRender = (AVAudioFrameCount)MIN(buffer.frameCapacity, targetFrames - engine.manualRenderingSampleTime);
+            AVAudioEngineManualRenderingStatus status = [engine renderOffline:toRender toBuffer:buffer error:&error];
+            if (status == AVAudioEngineManualRenderingStatusSuccess) {
+                [outFile writeFromBuffer:buffer error:&error];
+                if (error) { success = NO; break; }
+            } else if (status == AVAudioEngineManualRenderingStatusInsufficientDataFromInputNode) {
+                break;
+            } else { success = NO; break; }
+        }
+        [player stop]; [engine stop];
+        if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(success); });
+    });
 }
 
 // --- 变声特效渲染器 (暂不修改) ---
