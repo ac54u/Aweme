@@ -112,7 +112,9 @@ static BOOL _isAudioAssistantActive = NO;
         AVFormatIDKey: @(kAudioFormatMPEG4AAC),
         AVSampleRateKey: @(44100.0),
         AVNumberOfChannelsKey: @(1),
-        AVEncoderBitRateKey: @(64000),
+        AVEncoderBitRateKey: @(192000),
+        AVEncoderBitRateStrategyKey: AVAudioBitRateStrategy_Variable,
+        AVEncoderAudioQualityKey: @(AVAudioQualityMax),
         AVChannelLayoutKey: channelLayoutData
     };
     
@@ -201,10 +203,12 @@ static BOOL _isAudioAssistantActive = NO;
         AVFormatIDKey: @(kAudioFormatMPEG4AAC),
         AVSampleRateKey: @(44100.0),
         AVNumberOfChannelsKey: @(1),
-        AVEncoderBitRateKey: @(64000),
+        AVEncoderBitRateKey: @(192000),
+        AVEncoderBitRateStrategyKey: AVAudioBitRateStrategy_Variable,
+        AVEncoderAudioQualityKey: @(AVAudioQualityMax),
         AVChannelLayoutKey: channelLayoutData
     };
-    
+
     AVAudioFile *outputFile = [[AVAudioFile alloc] initForWriting:[NSURL fileURLWithPath:outputPath] settings:outputSettings commonFormat:monoBufferFormat.commonFormat interleaved:monoBufferFormat.isInterleaved error:&error];
     if (!outputFile) return NO;
     
@@ -285,7 +289,7 @@ static BOOL _isAudioAssistantActive = NO;
         NSString *outFileName = [NSString stringWithFormat:@"dyyy_fx_%@.m4a", [[NSUUID UUID] UUIDString]];
         NSString *outputPath = [NSTemporaryDirectory() stringByAppendingPathComponent:outFileName];
         
-        NSDictionary *outputSettings = @{ AVFormatIDKey: @(kAudioFormatMPEG4AAC), AVSampleRateKey: @(44100.0), AVNumberOfChannelsKey: @(1), AVEncoderBitRateKey: @(64000) };
+        NSDictionary *outputSettings = @{ AVFormatIDKey: @(kAudioFormatMPEG4AAC), AVSampleRateKey: @(44100.0), AVNumberOfChannelsKey: @(1), AVEncoderBitRateKey: @(192000), AVEncoderBitRateStrategyKey: AVAudioBitRateStrategy_Variable, AVEncoderAudioQualityKey: @(AVAudioQualityMax) };
         AVAudioFile *outputFile = [[AVAudioFile alloc] initForWriting:[NSURL fileURLWithPath:outputPath] settings:outputSettings commonFormat:monoBufferFormat.commonFormat interleaved:monoBufferFormat.isInterleaved error:&error];
         if (error || !outputFile) { if(completion) completion(nil, error); return; }
         

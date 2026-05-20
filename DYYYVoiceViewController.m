@@ -42,7 +42,7 @@ static NSString *g_pendingReplacePath = nil;
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.view.backgroundColor = [UIColor colorWithRed:0.95 green:0.95 blue:0.97 alpha:1.0]; 
+    self.view.backgroundColor = [UIColor systemGroupedBackgroundColor];
     self.selectedPaths = [NSMutableSet set];
     self.durationCache = [NSMutableDictionary dictionary]; 
     self.rawDurationCache = [NSMutableDictionary dictionary]; 
@@ -55,7 +55,7 @@ static NSString *g_pendingReplacePath = nil;
 
 - (void)setupHeaderView {
     self.headerView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 60)];
-    self.headerView.backgroundColor = [UIColor whiteColor];
+    self.headerView.backgroundColor = [UIColor systemBackgroundColor];
     
     UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 20, self.view.bounds.size.width, 20)];
     titleLabel.text = self.subPath.length > 0 ? [self.subPath lastPathComponent] : @"音频助手";
@@ -66,28 +66,28 @@ static NSString *g_pendingReplacePath = nil;
     UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     closeBtn.frame = CGRectMake(15, 15, 30, 30);
     [closeBtn setImage:[UIImage systemImageNamed:@"xmark"] forState:UIControlStateNormal];
-    closeBtn.tintColor = [UIColor blackColor];
+    closeBtn.tintColor = [UIColor labelColor];
     [closeBtn addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
     [self.headerView addSubview:closeBtn];
     
     UIButton *editBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     editBtn.frame = CGRectMake(self.view.bounds.size.width - 130, 15, 30, 30);
     [editBtn setImage:[UIImage systemImageNamed:@"checkmark.circle"] forState:UIControlStateNormal];
-    editBtn.tintColor = [UIColor blackColor];
+    editBtn.tintColor = [UIColor labelColor];
     [editBtn addTarget:self action:@selector(editTapped:) forControlEvents:UIControlEventTouchUpInside];
     [self.headerView addSubview:editBtn];
     
     UIButton *importBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     importBtn.frame = CGRectMake(self.view.bounds.size.width - 90, 15, 30, 30);
     [importBtn setImage:[UIImage systemImageNamed:@"square.and.arrow.down"] forState:UIControlStateNormal];
-    importBtn.tintColor = [UIColor blackColor];
+    importBtn.tintColor = [UIColor labelColor];
     [importBtn addTarget:self action:@selector(importAudioTapped) forControlEvents:UIControlEventTouchUpInside];
     [self.headerView addSubview:importBtn];
     
     UIButton *addBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     addBtn.frame = CGRectMake(self.view.bounds.size.width - 50, 15, 30, 30);
     [addBtn setImage:[UIImage systemImageNamed:@"plus.circle"] forState:UIControlStateNormal];
-    addBtn.tintColor = [UIColor blackColor];
+    addBtn.tintColor = [UIColor labelColor];
     [addBtn addTarget:self action:@selector(addFolderTapped) forControlEvents:UIControlEventTouchUpInside];
     [self.headerView addSubview:addBtn];
     
@@ -105,7 +105,7 @@ static NSString *g_pendingReplacePath = nil;
     self.tableHeaderView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 110)];
     
     self.searchField = [[UITextField alloc] initWithFrame:CGRectMake(15, 10, self.view.bounds.size.width - 30, 40)];
-    self.searchField.backgroundColor = [UIColor colorWithRed:0.9 green:0.9 blue:0.92 alpha:1.0];
+    self.searchField.backgroundColor = [UIColor tertiarySystemFillColor];
     self.searchField.layer.cornerRadius = 10;
     self.searchField.placeholder = @" 搜索音频文件";
     self.searchField.clearButtonMode = UITextFieldViewModeWhileEditing;
@@ -113,7 +113,7 @@ static NSString *g_pendingReplacePath = nil;
     
     UIImageView *searchIcon = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, 30, 20)];
     searchIcon.image = [UIImage systemImageNamed:@"magnifyingglass"];
-    searchIcon.tintColor = [UIColor grayColor];
+    searchIcon.tintColor = [UIColor secondaryLabelColor];
     searchIcon.contentMode = UIViewContentModeScaleAspectFit;
     self.searchField.leftView = searchIcon;
     self.searchField.leftViewMode = UITextFieldViewModeAlways;
@@ -125,7 +125,7 @@ static NSString *g_pendingReplacePath = nil;
     self.infoLabel.numberOfLines = 2;
     self.infoLabel.textAlignment = NSTextAlignmentCenter;
     self.infoLabel.font = [UIFont systemFontOfSize:12];
-    self.infoLabel.textColor = [UIColor grayColor];
+    self.infoLabel.textColor = [UIColor secondaryLabelColor];
     [self.tableHeaderView addSubview:self.infoLabel];
     
     self.tableView.tableHeaderView = self.tableHeaderView;
@@ -135,10 +135,10 @@ static NSString *g_pendingReplacePath = nil;
 - (void)setupBottomBar {
     CGFloat safeBottom = UIApplication.sharedApplication.keyWindow.safeAreaInsets.bottom;
     self.bottomBar = [[UIView alloc] initWithFrame:CGRectMake(0, self.view.bounds.size.height, self.view.bounds.size.width, 60 + safeBottom)];
-    self.bottomBar.backgroundColor = [UIColor whiteColor];
+    self.bottomBar.backgroundColor = [UIColor systemBackgroundColor];
     
     UIView *line = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 0.5)];
-    line.backgroundColor = [UIColor colorWithWhite:0.9 alpha:1.0];
+    line.backgroundColor = [UIColor separatorColor];
     [self.bottomBar addSubview:line];
     
     self.deleteSelectedBtn = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -473,7 +473,7 @@ static NSString *g_pendingReplacePath = nil;
         [cell.contentView addSubview:selectIcon];
         
         UIView *bgView = [[UIView alloc] initWithFrame:CGRectMake(15, 5, self.view.bounds.size.width - 30, 70)];
-        bgView.backgroundColor = [UIColor whiteColor];
+        bgView.backgroundColor = [UIColor secondarySystemGroupedBackgroundColor];
         bgView.layer.cornerRadius = 12;
         bgView.tag = 100;
         [cell.contentView addSubview:bgView];
@@ -510,7 +510,7 @@ static NSString *g_pendingReplacePath = nil;
         
         UIImageView *arrow = [[UIImageView alloc] initWithFrame:CGRectMake(bgView.bounds.size.width - 30, 25, 15, 20)];
         arrow.image = [UIImage systemImageNamed:@"chevron.right"];
-        arrow.tintColor = [UIColor lightGrayColor];
+        arrow.tintColor = [UIColor tertiaryLabelColor];
         arrow.tag = 107;
         [bgView addSubview:arrow];
     }
@@ -535,7 +535,7 @@ static NSString *g_pendingReplacePath = nil;
             selectIcon.tintColor = [UIColor systemBlueColor];
         } else {
             selectIcon.image = [UIImage systemImageNamed:@"circle"];
-            selectIcon.tintColor = [UIColor lightGrayColor];
+            selectIcon.tintColor = [UIColor tertiaryLabelColor];
         }
         playBtn.hidden = YES;
         sendBtn.hidden = YES;

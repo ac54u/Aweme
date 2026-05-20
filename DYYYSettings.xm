@@ -3563,72 +3563,9 @@ speedSettingsItem.detail = trimmedText;
 
     cleanupSection.itemArray = cleanupItems;
 
-    // 创建关于分类
-    AWESettingSectionModel *aboutSection = [[%c(AWESettingSectionModel) alloc] init];
-    aboutSection.sectionHeaderTitle = @"关于";
-    aboutSection.sectionHeaderHeight = 40;
-    aboutSection.type = 0;
-    NSMutableArray<AWESettingItemModel *> *aboutItems = [NSMutableArray array];
-
-    // 添加关于
-    AWESettingItemModel *aboutItem = [[%c(AWESettingItemModel) alloc] init];
-    aboutItem.identifier = @"DYYYAbout";
-    aboutItem.title = @"关于插件";
-    aboutItem.detail = DYYY_VERSION;
-    aboutItem.type = 0;
-    aboutItem.iconImageName = @"awe-settings-icon-about";
-    aboutItem.cellType = 26;
-    aboutItem.colorStyle = 0;
-    aboutItem.isEnable = YES;
-    aboutItem.cellTappedBlock = ^{
-      [DYYYSettingsHelper showAboutDialog:@"关于DYYY"
-                                  message:@"版本: " DYYY_VERSION @"\n\n"
-                                          @"感谢使用DYYY\n\n"
-                                          @"感谢huami开源\n\n"
-                                          @"@维他入我心 基于DYYY二次开发\n\n"
-                                          @"感谢huami group中群友的支持赞助\n\n"
-                                          @"Telegram @huamidev\n\n"
-                                          @"Telegram @vita_app\n\n"
-                                          @"开源地址 huami1314/DYYY\n\n"
-                                          @"仓库地址 Wtrwx/DYYY\n\n"
-                                onConfirm:nil];
-    };
-    [aboutItems addObject:aboutItem];
-
-    AWESettingItemModel *licenseItem = [[%c(AWESettingItemModel) alloc] init];
-    licenseItem.identifier = @"DYYYLicense";
-    licenseItem.title = @"开源协议";
-    licenseItem.detail = @"MIT License";
-    licenseItem.type = 0;
-    licenseItem.iconImageName = @"awe-settings-icon-opensource-notice";
-    licenseItem.cellType = 26;
-    licenseItem.colorStyle = 0;
-    licenseItem.isEnable = YES;
-    licenseItem.cellTappedBlock = ^{
-      [DYYYSettingsHelper showAboutDialog:@"MIT License"
-                                  message:@"Copyright (c) 2024 huami.\n\n"
-                                          @"Permission is hereby granted, free of charge, to any person obtaining a copy "
-                                          @"of this software and associated documentation files (the \"Software\"), to deal "
-                                          @"in the Software without restriction, including without limitation the rights "
-                                          @"to use, copy, modify, merge, publish, distribute, sublicense, and/or sell "
-                                          @"copies of the Software, and to permit persons to whom the Software is "
-                                          @"furnished to do so, subject to the following conditions:\n\n"
-                                          @"The above copyright notice and this permission notice shall be included in all "
-                                          @"copies or substantial portions of the Software.\n\n"
-                                          @"THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR "
-                                          @"IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, "
-                                          @"FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE "
-                                          @"AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER "
-                                          @"LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, "
-                                          @"OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE "
-                                          @"SOFTWARE."
-                                onConfirm:nil];
-    };
-    [aboutItems addObject:licenseItem];
     mainSection.itemArray = mainItems;
-    aboutSection.itemArray = aboutItems;
 
-    viewModel.sectionDataArray = @[ mainSection, cleanupSection, backupSection, aboutSection ];
+    viewModel.sectionDataArray = @[ mainSection, cleanupSection, backupSection ];
     objc_setAssociatedObject(settingsVC, &kViewModelKey, viewModel, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [rootVC.navigationController pushViewController:(UIViewController *)settingsVC animated:YES];
 }
