@@ -94,7 +94,7 @@ static BOOL _isAudioAssistantActive = NO;
     }
 
     // 🚨 核心修复 1：强制读取器自动完成 48000Hz 重采样，防止音频拉伸
-    // 32-bit float 中间层 + 母带级重采样算法，给 AAC 编码器提供最高精度原料
+    // 32-bit float 中间层，给 AAC 编码器提供最高精度原料
     NSDictionary *readerSettings = @{
         AVFormatIDKey: @(kAudioFormatLinearPCM),
         AVSampleRateKey: @(48000.0),
@@ -102,8 +102,7 @@ static BOOL _isAudioAssistantActive = NO;
         AVLinearPCMBitDepthKey: @(32),
         AVLinearPCMIsNonInterleaved: @(NO),
         AVLinearPCMIsFloatKey: @(YES),
-        AVLinearPCMIsBigEndianKey: @(NO),
-        AVSampleRateConverterAlgorithmKey: AVSampleRateConverterAlgorithmMastering
+        AVLinearPCMIsBigEndianKey: @(NO)
     };
     AVAssetReaderTrackOutput *readerOutput = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:audioTrack outputSettings:readerSettings];
     if (![reader canAddOutput:readerOutput]) return NO;
