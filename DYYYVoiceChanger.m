@@ -78,8 +78,8 @@ static BOOL _isAudioAssistantActive = NO;
     if (!reader) return NO;
     
     CMTime duration = asset.duration;
-    if (CMTimeGetSeconds(duration) > 57.5) {
-        reader.timeRange = CMTimeRangeMake(kCMTimeZero, CMTimeMakeWithSeconds(57.5, 600));
+    if (CMTimeGetSeconds(duration) > 29.5) {
+        reader.timeRange = CMTimeRangeMake(kCMTimeZero, CMTimeMakeWithSeconds(29.5, 600));
     }
     
     AVAssetTrack *audioTrack = [[asset tracksWithMediaType:AVMediaTypeAudio] firstObject];
@@ -228,7 +228,7 @@ static BOOL _isAudioAssistantActive = NO;
 
     AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:outputFormat frameCapacity:engine.manualRenderingMaximumFrameCount];
 
-    AVAudioFramePosition maxLength = (AVAudioFramePosition)(57.5 * outputFormat.sampleRate);
+    AVAudioFramePosition maxLength = (AVAudioFramePosition)(29.5 * outputFormat.sampleRate);
     AVAudioFramePosition targetLength = MIN((AVAudioFramePosition)(sourceFile.length * (48000.0 / sourceFile.processingFormat.sampleRate)), maxLength);
     
     BOOL success = YES;
@@ -262,8 +262,8 @@ static BOOL _isAudioAssistantActive = NO;
             AVAssetExportSession *session = [AVAssetExportSession exportSessionWithAsset:asset presetName:AVAssetExportPresetAppleM4A];
             session.outputURL = [NSURL fileURLWithPath:dstPath];
             session.outputFileType = AVFileTypeAppleM4A;
-            if (CMTimeGetSeconds(asset.duration) > 57.5)
-                session.timeRange = CMTimeRangeFromTimeToTime(kCMTimeZero, CMTimeMakeWithSeconds(57.5, 600));
+            if (CMTimeGetSeconds(asset.duration) > 29.5)
+                session.timeRange = CMTimeRangeFromTimeToTime(kCMTimeZero, CMTimeMakeWithSeconds(29.5, 600));
             [session exportAsynchronouslyWithCompletionHandler:^{
                 if (completion) completion(session.status == AVAssetExportSessionStatusCompleted);
             }];
@@ -303,7 +303,7 @@ static BOOL _isAudioAssistantActive = NO;
         if (!outFile) { [engine stop]; if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(NO); }); return; }
 
         AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:outFormat frameCapacity:engine.manualRenderingMaximumFrameCount];
-        AVAudioFramePosition maxFrames = (AVAudioFramePosition)(57.5 * outFormat.sampleRate);
+        AVAudioFramePosition maxFrames = (AVAudioFramePosition)(29.5 * outFormat.sampleRate);
         AVAudioFramePosition targetFrames = MIN((AVAudioFramePosition)(sourceFile.length * (48000.0 / sourceFile.processingFormat.sampleRate)), maxFrames);
 
         BOOL success = YES;
