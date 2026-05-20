@@ -86,13 +86,14 @@ static BOOL _isAudioAssistantActive = NO;
     if (!audioTrack) return NO;
     
     // 🚨 核心修复 1：强制读取器自动完成 44100Hz 和 单声道的重采样！绝不让音频被拉长拉慢！
-    NSDictionary *readerSettings = @{ 
+    // 32-bit float 中间层，给 AAC 编码器提供更高精度原料
+    NSDictionary *readerSettings = @{
         AVFormatIDKey: @(kAudioFormatLinearPCM),
         AVSampleRateKey: @(44100.0),
         AVNumberOfChannelsKey: @(1),
-        AVLinearPCMBitDepthKey: @(16),
+        AVLinearPCMBitDepthKey: @(32),
         AVLinearPCMIsNonInterleaved: @(NO),
-        AVLinearPCMIsFloatKey: @(NO),
+        AVLinearPCMIsFloatKey: @(YES),
         AVLinearPCMIsBigEndianKey: @(NO)
     };
     AVAssetReaderTrackOutput *readerOutput = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:audioTrack outputSettings:readerSettings];
@@ -112,7 +113,7 @@ static BOOL _isAudioAssistantActive = NO;
         AVFormatIDKey: @(kAudioFormatMPEG4AAC),
         AVSampleRateKey: @(44100.0),
         AVNumberOfChannelsKey: @(1),
-        AVEncoderBitRateKey: @(192000),
+        AVEncoderBitRateKey: @(256000),
         AVEncoderBitRateStrategyKey: AVAudioBitRateStrategy_Variable,
         AVEncoderAudioQualityKey: @(AVAudioQualityMax),
         AVChannelLayoutKey: channelLayoutData
@@ -203,7 +204,7 @@ static BOOL _isAudioAssistantActive = NO;
         AVFormatIDKey: @(kAudioFormatMPEG4AAC),
         AVSampleRateKey: @(44100.0),
         AVNumberOfChannelsKey: @(1),
-        AVEncoderBitRateKey: @(192000),
+        AVEncoderBitRateKey: @(256000),
         AVEncoderBitRateStrategyKey: AVAudioBitRateStrategy_Variable,
         AVEncoderAudioQualityKey: @(AVAudioQualityMax),
         AVChannelLayoutKey: channelLayoutData
@@ -289,7 +290,7 @@ static BOOL _isAudioAssistantActive = NO;
         NSString *outFileName = [NSString stringWithFormat:@"dyyy_fx_%@.m4a", [[NSUUID UUID] UUIDString]];
         NSString *outputPath = [NSTemporaryDirectory() stringByAppendingPathComponent:outFileName];
         
-        NSDictionary *outputSettings = @{ AVFormatIDKey: @(kAudioFormatMPEG4AAC), AVSampleRateKey: @(44100.0), AVNumberOfChannelsKey: @(1), AVEncoderBitRateKey: @(192000), AVEncoderBitRateStrategyKey: AVAudioBitRateStrategy_Variable, AVEncoderAudioQualityKey: @(AVAudioQualityMax) };
+        NSDictionary *outputSettings = @{ AVFormatIDKey: @(kAudioFormatMPEG4AAC), AVSampleRateKey: @(44100.0), AVNumberOfChannelsKey: @(1), AVEncoderBitRateKey: @(256000), AVEncoderBitRateStrategyKey: AVAudioBitRateStrategy_Variable, AVEncoderAudioQualityKey: @(AVAudioQualityMax) };
         AVAudioFile *outputFile = [[AVAudioFile alloc] initForWriting:[NSURL fileURLWithPath:outputPath] settings:outputSettings commonFormat:monoBufferFormat.commonFormat interleaved:monoBufferFormat.isInterleaved error:&error];
         if (error || !outputFile) { if(completion) completion(nil, error); return; }
         
