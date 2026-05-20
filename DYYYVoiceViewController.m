@@ -42,15 +42,27 @@ static NSString *g_pendingReplacePath = nil;
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    // 抖音强制浅色模式，从 UIScreen 读取系统真实配色并覆盖
+    if (@available(iOS 13.0, *)) {
+        self.overrideUserInterfaceStyle = UIScreen.mainScreen.traitCollection.userInterfaceStyle;
+    }
     self.view.backgroundColor = [UIColor systemGroupedBackgroundColor];
     self.selectedPaths = [NSMutableSet set];
-    self.durationCache = [NSMutableDictionary dictionary]; 
-    self.rawDurationCache = [NSMutableDictionary dictionary]; 
-    
+    self.durationCache = [NSMutableDictionary dictionary];
+    self.rawDurationCache = [NSMutableDictionary dictionary];
+
     [self setupHeaderView];
     [self setupTableView];
     [self setupBottomBar];
     [self loadData];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    // 每次出现时同步，防止用户在后台切换了系统配色
+    if (@available(iOS 13.0, *)) {
+        self.overrideUserInterfaceStyle = UIScreen.mainScreen.traitCollection.userInterfaceStyle;
+    }
 }
 
 - (void)setupHeaderView {
