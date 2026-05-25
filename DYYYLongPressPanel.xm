@@ -1545,47 +1545,73 @@ static BOOL g_isLastCapturedNetwork = NO; // 显式标记当前抓到的是否�
 
 static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
     if (!URL) return;
-    
+
     NSString *urlStr = URL.absoluteString;
     NSString *localPath = URL.path; // 纯粹的本地路径，没有 file:// 前缀
     NSString *lowerStr = urlStr.lowercaseString;
-    
-    // 🛑 核心黑名单：屏蔽自己录制的、裁剪的、变声的文件
-    if ([lowerStr containsString:@"temp_trimmed"] ||
-        [lowerStr containsString:@"dyyy_"] ||
-        [lowerStr containsString:@"record"] ||
-        [lowerStr containsString:@"upload"] ||
-        [lowerStr containsString:@"draft"]) {
+    NSString *lowerName = URL.lastPathComponent.lowercaseString ?: @"";
+    NSString *pathExt = URL.pathExtension.lowercaseString ?: @"";
+
+    // 🛑 黑名单：屏蔽自己录制的、裁剪的、变声的文件
+    // 用 lastPathComponent + 路径段精确匹配，避免误伤线上 URL 里的 "record"/"upload" 字面量
+    if ([lowerName hasPrefix:@"temp_trimmed"] ||
+        [lowerName hasPrefix:@"dyyy_"] ||
+        [lowerStr containsString:@"/record/"] ||
+        [lowerStr containsString:@"/draft/"]) {
         return;
     }
-    
+
     BOOL isNetwork = [lowerStr hasPrefix:@"http"];
-    // 扩大本地白名单，防漏抓
+
+    // 🎵 扩展名白名单：抖音评论区/私信语音常见格式
+    BOOL hasAudioExt = ([pathExt isEqualToString:@"mp3"] ||
+                        [pathExt isEqualToString:@"m4a"] ||
+                        [pathExt isEqualToString:@"aac"] ||
+                        [pathExt isEqualToString:@"amr"] ||
+                        [pathExt isEqualToString:@"silk"] ||
+                        [pathExt isEqualToString:@"wav"] ||
+                        [pathExt isEqualToString:@"ogg"] ||
+                        [pathExt isEqualToString:@"opus"] ||
+                        [pathExt isEqualToString:@"flac"]);
+
+    // 🎯 关键词白名单：评论区/私信语音的 CDN 路径常用 voice / im_msg / obj/im
+    BOOL hasAudioKeyword = ([lowerStr containsString:@"audio"] ||
+                            [lowerStr containsString:@"voice"] ||
+                            [lowerStr containsString:@"im_msg"] ||
+                            [lowerStr containsString:@"im-msg"] ||
+                            [lowerStr containsString:@"obj/im"]);
+
     BOOL isLocalTarget = localPath && (
                          [lowerStr containsString:@"cache"] ||
                          [lowerStr containsString:@"attachment"] ||
                          [lowerStr containsString:@"comment"] ||
                          [lowerStr containsString:@"im_audio"] ||
+                         [lowerStr containsString:@"im-audio"] ||
                          [lowerStr containsString:@"chat"] ||
-                         [lowerStr containsString:@"audio"]); 
-                         
-    // 过滤掉明显的非音频文件 (视频/图片)
-    if ([lowerStr containsString:@".mp4"] ||
-        [lowerStr containsString:@".jpg"] ||
-        [lowerStr containsString:@".png"] ||
-        [lowerStr containsString:@".webp"] ||
-        [lowerStr containsString:@".gif"]) {
+                         [lowerStr containsString:@"voice"] ||
+                         [lowerStr containsString:@"audio"]);
+
+    // 过滤掉明显的非音频文件 (视频/图片)；用 pathExtension 避免误伤
+    if ([pathExt isEqualToString:@"mp4"] ||
+        [pathExt isEqualToString:@"mov"] ||
+        [pathExt isEqualToString:@"flv"] ||
+        [pathExt isEqualToString:@"m3u8"] ||
+        [pathExt isEqualToString:@"ts"] ||
+        [pathExt isEqualToString:@"jpg"] ||
+        [pathExt isEqualToString:@"jpeg"] ||
+        [pathExt isEqualToString:@"png"] ||
+        [pathExt isEqualToString:@"webp"] ||
+        [pathExt isEqualToString:@"gif"]) {
         return;
     }
 
     // 🎯 记录路径并区分网络/本地
-    if (isNetwork && [lowerStr containsString:@"audio"]) { 
-        // 针对网络流，必须带有 audio 关键词，防止抓到网页请求
+    if (isNetwork && (hasAudioExt || hasAudioKeyword)) {
         g_lastCapturedAudioPath = urlStr;
         g_isLastCapturedNetwork = YES;
-    } else if (isLocalTarget) {
-        // ⚠️ 修复私信 Bug：本地文件必须存纯路径 localPath，不能存 urlStr
-        g_lastCapturedAudioPath = localPath; 
+    } else if (!isNetwork && (isLocalTarget || hasAudioExt)) {
+        // ⚠️ 本地文件必须存纯路径 localPath，不能存 urlStr
+        g_lastCapturedAudioPath = localPath;
         g_isLastCapturedNetwork = NO;
     }
 }
