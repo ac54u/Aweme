@@ -1693,43 +1693,59 @@ static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
 // 📁 兜底：沙盒缓存扫描（应对字节自家网络栈完全绕过 NSURLSession 的情况）
 // ==========================================
 // 抖音播放评论区语音时，必然会把音频写入 sandbox 某处再播放。
-// 摇一摇时如果前面所有 hook 都没抓到，遍历 Library/Caches 找最近 90s 内
-// 写入的音频文件作为兜底候选。
-static NSString *DYYY_ScanRecentAudioInCache(NSTimeInterval maxAgeSec) {
-    NSString *cacheRoot = [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES) firstObject];
-    if (!cacheRoot) return nil;
+// 摇一摇时如果前面所有 hook 都没抓到，遍历整个沙盒找最近写入的音频文件作为兜底候选。
+// 返回 best path + 写入扫描统计到 outStats（用于诊断）。
+static NSString *DYYY_ScanRecentAudioInCache(NSTimeInterval maxAgeSec, NSMutableString *outStats) {
+    NSArray<NSString *> *roots = @[
+        [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES) firstObject] ?: @"",
+        [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject] ?: @"",
+        [NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES) firstObject] ?: @"",
+        NSTemporaryDirectory() ?: @"",
+    ];
 
-    NSArray<NSString *> *audioExts = @[ @"m4a", @"mp3", @"aac", @"amr", @"silk", @"wav", @"ogg", @"opus" ];
+    NSArray<NSString *> *audioExts = @[ @"m4a", @"mp3", @"aac", @"amr", @"silk", @"wav", @"ogg", @"opus", @"flac" ];
     NSDate *cutoff = [NSDate dateWithTimeIntervalSinceNow:-maxAgeSec];
 
     NSString *bestPath = nil;
     NSDate *bestDate = nil;
+    NSInteger totalSeen = 0;
+    NSInteger matchedExt = 0;
+    NSInteger inWindow = 0;
 
-    NSDirectoryEnumerator *e = [[NSFileManager defaultManager] enumeratorAtPath:cacheRoot];
-    NSString *rel;
-    while ((rel = [e nextObject])) {
-        NSString *ext = rel.pathExtension.lowercaseString;
-        if (![audioExts containsObject:ext]) continue;
+    for (NSString *root in roots) {
+        if (!root.length) continue;
+        NSDirectoryEnumerator *e = [[NSFileManager defaultManager] enumeratorAtPath:root];
+        NSString *rel;
+        while ((rel = [e nextObject])) {
+            totalSeen++;
+            NSString *ext = rel.pathExtension.lowercaseString;
+            if (![audioExts containsObject:ext]) continue;
+            matchedExt++;
 
-        NSString *full = [cacheRoot stringByAppendingPathComponent:rel];
-        NSString *lower = full.lowercaseString;
-        NSString *lastComp = full.lastPathComponent.lowercaseString;
+            NSString *full = [root stringByAppendingPathComponent:rel];
+            NSString *lower = full.lowercaseString;
+            NSString *lastComp = full.lastPathComponent.lowercaseString;
 
-        // 排除自己写入的文件
-        if ([lastComp hasPrefix:@"dyyy_"] ||
-            [lastComp hasPrefix:@"temp_trimmed"] ||
-            [lastComp hasPrefix:@"提取语音"] ||
-            [lower containsString:@"/record/"] ||
-            [lower containsString:@"/draft/"]) continue;
+            // 排除自己写入的文件
+            if ([lastComp hasPrefix:@"dyyy_"] ||
+                [lastComp hasPrefix:@"temp_trimmed"] ||
+                [lastComp hasPrefix:@"提取语音"] ||
+                [lower containsString:@"/record/"] ||
+                [lower containsString:@"/draft/"]) continue;
 
-        NSDictionary *attrs = [e fileAttributes];
-        NSDate *mtime = attrs[NSFileModificationDate];
-        if (!mtime || [mtime compare:cutoff] == NSOrderedAscending) continue;
+            NSDictionary *attrs = [e fileAttributes];
+            NSDate *mtime = attrs[NSFileModificationDate];
+            if (!mtime || [mtime compare:cutoff] == NSOrderedAscending) continue;
+            inWindow++;
 
-        if (!bestDate || [mtime compare:bestDate] == NSOrderedDescending) {
-            bestDate = mtime;
-            bestPath = full;
+            if (!bestDate || [mtime compare:bestDate] == NSOrderedDescending) {
+                bestDate = mtime;
+                bestPath = full;
+            }
         }
+    }
+    if (outStats) {
+        [outStats appendFormat:@"扫描:%ld 音频:%ld 窗口内:%ld", (long)totalSeen, (long)matchedExt, (long)inWindow];
     }
     return bestPath;
 }
@@ -1741,13 +1757,30 @@ static NSString *DYYY_ScanRecentAudioInCache(NSTimeInterval maxAgeSec) {
 %hook UIWindow
 - (void)motionEnded:(UIEventSubtype)motion withEvent:(UIEvent *)event {
     if (motion == UIEventSubtypeMotionShake) {
-        // 兜底：所有 hook 都没抓到时，扫描沙盒 cache 找最近 90s 内的音频文件
+        // 🔬 诊断模式：无论结果都弹 toast，告知 hook 是否生效、是否捕获到 URL
+        BOOL hadHookPath = (g_lastCapturedAudioPath != nil);
+        BOOL hookIsNetwork = g_isLastCapturedNetwork;
+
+        // 兜底：所有 hook 都没抓到时，扫描整个沙盒
+        NSMutableString *stats = [NSMutableString string];
         if (!g_lastCapturedAudioPath) {
-            NSString *scanned = DYYY_ScanRecentAudioInCache(90.0);
+            NSString *scanned = DYYY_ScanRecentAudioInCache(300.0, stats);
             if (scanned) {
                 g_lastCapturedAudioPath = scanned;
                 g_isLastCapturedNetwork = NO;
             }
+        }
+
+        if (!g_lastCapturedAudioPath) {
+            NSString *diag = [NSString stringWithFormat:@"🔬 摇到了但没抓到\nhook:%@ %@\n%@",
+                hadHookPath ? @"有" : @"无",
+                hookIsNetwork ? @"net" : @"local",
+                stats];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [DYYYUtils showToast:diag];
+            });
+            %orig;
+            return;
         }
     }
     if (motion == UIEventSubtypeMotionShake && g_lastCapturedAudioPath) {
