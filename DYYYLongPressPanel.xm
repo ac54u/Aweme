@@ -1542,7 +1542,32 @@
 // 🚀 评论区/私信语音提取模块 (终极全覆盖修复版)
 // ==========================================
 static NSString *g_lastCapturedAudioPath = nil;
-static BOOL g_isLastCapturedNetwork = NO; // 显式标记当前抓到的是否为网络流
+static NSData   *g_lastCapturedAudioData = nil; // 内存缓存：防止临时文件被抖音删除
+static BOOL g_isLastCapturedNetwork = NO;
+
+// 通过文件头 magic bytes 判断是否音频，不依赖扩展名/路径
+// 抖音评论区语音是无扩展名的哈希文件，必须靠内容识别
+static BOOL DYYY_IsAudioMagic(NSData *data) {
+    if (!data || data.length < 8) return NO;
+    const uint8_t *b = (const uint8_t *)data.bytes;
+    // M4A / AAC: ftyp box (偏移 4 处)
+    if (data.length >= 8 && b[4]=='f' && b[5]=='t' && b[6]=='y' && b[7]=='p') return YES;
+    // MP3: ID3 tag
+    if (b[0]==0x49 && b[1]==0x44 && b[2]==0x33) return YES;
+    // MP3: frame sync
+    if (b[0]==0xFF && (b[1] & 0xE0)==0xE0) return YES;
+    // OGG
+    if (b[0]==0x4F && b[1]==0x67 && b[2]==0x67 && b[3]==0x53) return YES;
+    // FLAC
+    if (b[0]==0x66 && b[1]==0x4C && b[2]==0x61 && b[3]==0x43) return YES;
+    // WAV (RIFF)
+    if (b[0]==0x52 && b[1]==0x49 && b[2]==0x46 && b[3]==0x46) return YES;
+    // AMR
+    if (data.length>=5 && b[0]=='#' && b[1]=='!' && b[2]=='A' && b[3]=='M' && b[4]=='R') return YES;
+    // SILK（抖音/微信私信常用）
+    if (data.length>=6 && b[0]=='#' && b[1]=='!' && b[2]=='S' && b[3]=='I' && b[4]=='L' && b[5]=='K') return YES;
+    return NO;
+}
 
 static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
     if (!URL) return;
@@ -1689,36 +1714,46 @@ static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
 }
 %end
 
-// --- 📂 文件读取拦截：抖音评论区语音是预缓存的，播放时只读不写 ---
-// hook NSData/NSFileHandle 抓住"读哪个文件"
+// --- 📂 文件读取拦截：用 magic bytes 识别音频，数据缓存到内存 ---
+// 抖音评论区语音是无扩展名的哈希缓存文件，无法靠路径识别，
+// 靠文件头 magic bytes 判断是否音频，并立即在内存里存一份，
+// 避免抖音读完就删临时文件导致摇一摇时拷贝失败。
+
+static void DYYY_CaptureFromData(NSData *result, NSString *path, BOOL isNetworkURL) {
+    if (!result || !DYYY_IsAudioMagic(result)) return;
+    if (!path) return;
+    NSString *lower = path.lowercaseString;
+    NSString *lname = path.lastPathComponent.lowercaseString;
+    // 排除自己写入的文件
+    if ([lname hasPrefix:@"dyyy_"] || [lname hasPrefix:@"temp_trimmed"] ||
+        [lname hasPrefix:@"提取语音"] || [lower containsString:@"/record/"] ||
+        [lower containsString:@"/draft/"]) return;
+    // 记录路径 + 内存缓存
+    g_lastCapturedAudioPath = path;
+    g_lastCapturedAudioData = result;
+    g_isLastCapturedNetwork = isNetworkURL;
+}
 
 %hook NSData
 + (instancetype)dataWithContentsOfFile:(NSString *)path {
-    if (path) DYYY_CheckAndCaptureAudio([NSURL fileURLWithPath:path], @"NSData_File");
-    return %orig;
+    NSData *result = %orig;
+    DYYY_CaptureFromData(result, path, NO);
+    return result;
 }
-+ (instancetype)dataWithContentsOfFile:(NSString *)path options:(NSDataReadingOptions)readOptionsMask error:(NSError **)errorPtr {
-    if (path) DYYY_CheckAndCaptureAudio([NSURL fileURLWithPath:path], @"NSData_FileOpt");
-    return %orig;
++ (instancetype)dataWithContentsOfFile:(NSString *)path options:(NSDataReadingOptions)opts error:(NSError **)err {
+    NSData *result = %orig;
+    DYYY_CaptureFromData(result, path, NO);
+    return result;
 }
 + (instancetype)dataWithContentsOfURL:(NSURL *)url {
-    if (url) DYYY_CheckAndCaptureAudio(url, @"NSData_URL");
-    return %orig;
+    NSData *result = %orig;
+    if (url) DYYY_CaptureFromData(result, url.absoluteString, [url.scheme hasPrefix:@"http"]);
+    return result;
 }
-+ (instancetype)dataWithContentsOfURL:(NSURL *)url options:(NSDataReadingOptions)readOptionsMask error:(NSError **)errorPtr {
-    if (url) DYYY_CheckAndCaptureAudio(url, @"NSData_URLOpt");
-    return %orig;
-}
-%end
-
-%hook NSFileHandle
-+ (instancetype)fileHandleForReadingAtPath:(NSString *)path {
-    if (path) DYYY_CheckAndCaptureAudio([NSURL fileURLWithPath:path], @"NSFH_Path");
-    return %orig;
-}
-+ (instancetype)fileHandleForReadingFromURL:(NSURL *)url error:(NSError **)error {
-    if (url) DYYY_CheckAndCaptureAudio(url, @"NSFH_URL");
-    return %orig;
++ (instancetype)dataWithContentsOfURL:(NSURL *)url options:(NSDataReadingOptions)opts error:(NSError **)err {
+    NSData *result = %orig;
+    if (url) DYYY_CaptureFromData(result, url.absoluteString, [url.scheme hasPrefix:@"http"]);
+    return result;
 }
 %end
 
@@ -1794,13 +1829,14 @@ static NSString *DYYY_ScanRecentAudioInCache(NSTimeInterval maxAgeSec, NSMutable
 %hook UIWindow
 - (void)motionEnded:(UIEventSubtype)motion withEvent:(UIEvent *)event {
     if (motion == UIEventSubtypeMotionShake) {
-        // 🔬 诊断模式：无论结果都弹 toast，告知 hook 是否生效、是否捕获到 URL
+        // 🔬 诊断模式：抓不到时弹详情 toast
         BOOL hadHookPath = (g_lastCapturedAudioPath != nil);
+        BOOL hadMemData  = (g_lastCapturedAudioData != nil);
         BOOL hookIsNetwork = g_isLastCapturedNetwork;
 
         // 兜底：所有 hook 都没抓到时，扫描整个沙盒
         NSMutableString *stats = [NSMutableString string];
-        if (!g_lastCapturedAudioPath) {
+        if (!g_lastCapturedAudioPath && !g_lastCapturedAudioData) {
             NSString *scanned = DYYY_ScanRecentAudioInCache(300.0, stats);
             if (scanned) {
                 g_lastCapturedAudioPath = scanned;
@@ -1808,9 +1844,10 @@ static NSString *DYYY_ScanRecentAudioInCache(NSTimeInterval maxAgeSec, NSMutable
             }
         }
 
-        if (!g_lastCapturedAudioPath) {
-            NSString *diag = [NSString stringWithFormat:@"🔬 摇到了但没抓到\nhook:%@ %@\n%@",
+        if (!g_lastCapturedAudioPath && !g_lastCapturedAudioData) {
+            NSString *diag = [NSString stringWithFormat:@"🔬 摇到了但没抓到\npath:%@ data:%@ %@\n%@",
                 hadHookPath ? @"有" : @"无",
+                hadMemData  ? @"有" : @"无",
                 hookIsNetwork ? @"net" : @"local",
                 stats];
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -1856,31 +1893,27 @@ static NSString *DYYY_ScanRecentAudioInCache(NSTimeInterval maxAgeSec, NSMutable
             });
             
         } 
-        // 📁 场景 2：本地拷贝 (私信)
+        // 📁 场景 2：本地（评论区缓存 / 私信）
         else {
-            if ([[NSFileManager defaultManager] fileExistsAtPath:g_lastCapturedAudioPath]) {
-                NSError *error = nil;
-                [[NSFileManager defaultManager] copyItemAtPath:g_lastCapturedAudioPath toPath:targetPath error:&error];
-                
+            NSData *memData = g_lastCapturedAudioData;
+            NSString *srcPath = g_lastCapturedAudioPath;
+            g_lastCapturedAudioPath = nil;
+            g_lastCapturedAudioData = nil;
+
+            // 优先用内存数据（应对临时文件已被删的情况）
+            if (memData && [memData writeToFile:targetPath atomically:YES]) {
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    if (!error) {
-                        [DYYYUtils showToast:@"✅ 摇一摇：私信语音已提取至助手！"];
-                        g_lastCapturedAudioPath = nil;
-                    } else {
-                        [DYYYUtils showToast:@"❌ 本地提取失败"];
-                    }
+                    [DYYYUtils showToast:@"✅ 摇一摇：语音已提取至助手！"];
+                });
+            } else if (srcPath && [[NSFileManager defaultManager] fileExistsAtPath:srcPath]) {
+                NSError *error = nil;
+                [[NSFileManager defaultManager] copyItemAtPath:srcPath toPath:targetPath error:&error];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [DYYYUtils showToast:error ? @"❌ 本地提取失败" : @"✅ 摇一摇：语音已提取至助手！"];
                 });
             } else {
-                NSString *capturedPath = g_lastCapturedAudioPath;
-                g_lastCapturedAudioPath = nil;
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    NSArray *comps = capturedPath.pathComponents;
-                    NSString *shortPath = comps.count > 4
-                        ? [NSString stringWithFormat:@".../%@/%@/%@/%@",
-                            comps[comps.count-4], comps[comps.count-3],
-                            comps[comps.count-2], comps.lastObject]
-                        : capturedPath;
-                    [DYYYUtils showToast:[NSString stringWithFormat:@"❌ 文件不存在:\n%@", shortPath]];
+                    [DYYYUtils showToast:@"❌ 未捕获到语音，请先播放再摇"];
                 });
             }
         }
