@@ -1871,8 +1871,16 @@ static NSString *DYYY_ScanRecentAudioInCache(NSTimeInterval maxAgeSec, NSMutable
                     }
                 });
             } else {
+                NSString *capturedPath = g_lastCapturedAudioPath;
+                g_lastCapturedAudioPath = nil;
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    [DYYYUtils showToast:@"❌ 本地文件不存在或已失效"];
+                    NSArray *comps = capturedPath.pathComponents;
+                    NSString *shortPath = comps.count > 4
+                        ? [NSString stringWithFormat:@".../%@/%@/%@/%@",
+                            comps[comps.count-4], comps[comps.count-3],
+                            comps[comps.count-2], comps.lastObject]
+                        : capturedPath;
+                    [DYYYUtils showToast:[NSString stringWithFormat:@"❌ 文件不存在:\n%@", shortPath]];
                 });
             }
         }
