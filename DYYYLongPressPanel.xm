@@ -1,3 +1,4 @@
+#import <sys/stat.h>
 #import "DYYYAudioManager.h"
 #import "AwemeHeaders.h"
 #import "DYYYBottomAlertView.h"
@@ -1688,13 +1689,45 @@ static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
 }
 %end
 
+// --- 📂 文件读取拦截：抖音评论区语音是预缓存的，播放时只读不写 ---
+// hook NSData/NSFileHandle 抓住"读哪个文件"
+
+%hook NSData
++ (instancetype)dataWithContentsOfFile:(NSString *)path {
+    if (path) DYYY_CheckAndCaptureAudio([NSURL fileURLWithPath:path], @"NSData_File");
+    return %orig;
+}
++ (instancetype)dataWithContentsOfFile:(NSString *)path options:(NSDataReadingOptions)readOptionsMask error:(NSError **)errorPtr {
+    if (path) DYYY_CheckAndCaptureAudio([NSURL fileURLWithPath:path], @"NSData_FileOpt");
+    return %orig;
+}
++ (instancetype)dataWithContentsOfURL:(NSURL *)url {
+    if (url) DYYY_CheckAndCaptureAudio(url, @"NSData_URL");
+    return %orig;
+}
++ (instancetype)dataWithContentsOfURL:(NSURL *)url options:(NSDataReadingOptions)readOptionsMask error:(NSError **)errorPtr {
+    if (url) DYYY_CheckAndCaptureAudio(url, @"NSData_URLOpt");
+    return %orig;
+}
+%end
+
+%hook NSFileHandle
++ (instancetype)fileHandleForReadingAtPath:(NSString *)path {
+    if (path) DYYY_CheckAndCaptureAudio([NSURL fileURLWithPath:path], @"NSFH_Path");
+    return %orig;
+}
++ (instancetype)fileHandleForReadingFromURL:(NSURL *)url error:(NSError **)error {
+    if (url) DYYY_CheckAndCaptureAudio(url, @"NSFH_URL");
+    return %orig;
+}
+%end
+
 
 // ==========================================
-// 📁 兜底：沙盒缓存扫描（应对字节自家网络栈完全绕过 NSURLSession 的情况）
+// 📁 兜底：沙盒扫描（按 atime 找最近被访问的音频，不是按 mtime）
 // ==========================================
-// 抖音播放评论区语音时，必然会把音频写入 sandbox 某处再播放。
-// 摇一摇时如果前面所有 hook 都没抓到，遍历整个沙盒找最近写入的音频文件作为兜底候选。
-// 返回 best path + 写入扫描统计到 outStats（用于诊断）。
+// 抖音评论区语音是预缓存的：用户点播时只读取已有文件，mtime 不会更新。
+// 改用 atime（access time，通过 stat() 拿）找最近被"读取"的音频文件。
 static NSString *DYYY_ScanRecentAudioInCache(NSTimeInterval maxAgeSec, NSMutableString *outStats) {
     NSArray<NSString *> *roots = @[
         [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES) firstObject] ?: @"",
@@ -1704,10 +1737,12 @@ static NSString *DYYY_ScanRecentAudioInCache(NSTimeInterval maxAgeSec, NSMutable
     ];
 
     NSArray<NSString *> *audioExts = @[ @"m4a", @"mp3", @"aac", @"amr", @"silk", @"wav", @"ogg", @"opus", @"flac" ];
-    NSDate *cutoff = [NSDate dateWithTimeIntervalSinceNow:-maxAgeSec];
+
+    time_t now = time(NULL);
+    time_t cutoff = now - (time_t)maxAgeSec;
 
     NSString *bestPath = nil;
-    NSDate *bestDate = nil;
+    time_t bestAtime = 0;
     NSInteger totalSeen = 0;
     NSInteger matchedExt = 0;
     NSInteger inWindow = 0;
@@ -1733,13 +1768,15 @@ static NSString *DYYY_ScanRecentAudioInCache(NSTimeInterval maxAgeSec, NSMutable
                 [lower containsString:@"/record/"] ||
                 [lower containsString:@"/draft/"]) continue;
 
-            NSDictionary *attrs = [e fileAttributes];
-            NSDate *mtime = attrs[NSFileModificationDate];
-            if (!mtime || [mtime compare:cutoff] == NSOrderedAscending) continue;
+            struct stat st;
+            if (stat(full.fileSystemRepresentation, &st) != 0) continue;
+            // 取 atime/mtime 较大者作为"最近活动时间"，兼容 atime 不更新的情况
+            time_t latest = st.st_atime > st.st_mtime ? st.st_atime : st.st_mtime;
+            if (latest < cutoff) continue;
             inWindow++;
 
-            if (!bestDate || [mtime compare:bestDate] == NSOrderedDescending) {
-                bestDate = mtime;
+            if (latest > bestAtime) {
+                bestAtime = latest;
                 bestPath = full;
             }
         }
