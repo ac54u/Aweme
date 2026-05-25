@@ -1658,14 +1658,100 @@ static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
 }
 %end
 
+// --- 🌐 兜底：NSURLSession / NSURLRequest 拦截 ---
+// 抖音评论区语音常走字节自家播放器（TTPlayerView 等），不经 AVFoundation，
+// 但 HTTP 下载终归要走 NSURLSession。在请求层捕获 URL 作为最后防线。
+
+%hook NSURLSession
+- (NSURLSessionDataTask *)dataTaskWithURL:(NSURL *)url {
+    DYYY_CheckAndCaptureAudio(url, @"URLSession_Data_URL");
+    return %orig;
+}
+- (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request {
+    if (request.URL) DYYY_CheckAndCaptureAudio(request.URL, @"URLSession_Data_Req");
+    return %orig;
+}
+- (NSURLSessionDownloadTask *)downloadTaskWithURL:(NSURL *)url {
+    DYYY_CheckAndCaptureAudio(url, @"URLSession_Dl_URL");
+    return %orig;
+}
+- (NSURLSessionDownloadTask *)downloadTaskWithRequest:(NSURLRequest *)request {
+    if (request.URL) DYYY_CheckAndCaptureAudio(request.URL, @"URLSession_Dl_Req");
+    return %orig;
+}
+%end
+
+%hook NSURLRequest
++ (instancetype)requestWithURL:(NSURL *)URL {
+    DYYY_CheckAndCaptureAudio(URL, @"URLRequest_With");
+    return %orig;
+}
+%end
+
+
+// ==========================================
+// 📁 兜底：沙盒缓存扫描（应对字节自家网络栈完全绕过 NSURLSession 的情况）
+// ==========================================
+// 抖音播放评论区语音时，必然会把音频写入 sandbox 某处再播放。
+// 摇一摇时如果前面所有 hook 都没抓到，遍历 Library/Caches 找最近 90s 内
+// 写入的音频文件作为兜底候选。
+static NSString *DYYY_ScanRecentAudioInCache(NSTimeInterval maxAgeSec) {
+    NSString *cacheRoot = [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES) firstObject];
+    if (!cacheRoot) return nil;
+
+    NSArray<NSString *> *audioExts = @[ @"m4a", @"mp3", @"aac", @"amr", @"silk", @"wav", @"ogg", @"opus" ];
+    NSDate *cutoff = [NSDate dateWithTimeIntervalSinceNow:-maxAgeSec];
+
+    NSString *bestPath = nil;
+    NSDate *bestDate = nil;
+
+    NSDirectoryEnumerator *e = [[NSFileManager defaultManager] enumeratorAtPath:cacheRoot];
+    NSString *rel;
+    while ((rel = [e nextObject])) {
+        NSString *ext = rel.pathExtension.lowercaseString;
+        if (![audioExts containsObject:ext]) continue;
+
+        NSString *full = [cacheRoot stringByAppendingPathComponent:rel];
+        NSString *lower = full.lowercaseString;
+        NSString *lastComp = full.lastPathComponent.lowercaseString;
+
+        // 排除自己写入的文件
+        if ([lastComp hasPrefix:@"dyyy_"] ||
+            [lastComp hasPrefix:@"temp_trimmed"] ||
+            [lastComp hasPrefix:@"提取语音"] ||
+            [lower containsString:@"/record/"] ||
+            [lower containsString:@"/draft/"]) continue;
+
+        NSDictionary *attrs = [e fileAttributes];
+        NSDate *mtime = attrs[NSFileModificationDate];
+        if (!mtime || [mtime compare:cutoff] == NSOrderedAscending) continue;
+
+        if (!bestDate || [mtime compare:bestDate] == NSOrderedDescending) {
+            bestDate = mtime;
+            bestPath = full;
+        }
+    }
+    return bestPath;
+}
+
 
 // ==========================================
 // 📱 摇一摇触发导出 (网络与本地智能分发版)
 // ==========================================
 %hook UIWindow
 - (void)motionEnded:(UIEventSubtype)motion withEvent:(UIEvent *)event {
+    if (motion == UIEventSubtypeMotionShake) {
+        // 兜底：所有 hook 都没抓到时，扫描沙盒 cache 找最近 90s 内的音频文件
+        if (!g_lastCapturedAudioPath) {
+            NSString *scanned = DYYY_ScanRecentAudioInCache(90.0);
+            if (scanned) {
+                g_lastCapturedAudioPath = scanned;
+                g_isLastCapturedNetwork = NO;
+            }
+        }
+    }
     if (motion == UIEventSubtypeMotionShake && g_lastCapturedAudioPath) {
-        
+
         NSString *targetDir = [[DYYYAudioManager sharedManager] voiceDirectory];
         NSString *ext = @"aac"; // 默认 aac
         
