@@ -440,6 +440,10 @@ void updateSpeedButtonVisibility() {
 }
 
 - (void)checkAndRecoverButtonStatus {
+    if (self.hidden || self.alpha < 0.01) {
+        return;
+    }
+
     if (!self.isResponding) {
         [self resetButtonState];
         [self setupGestureRecognizers];

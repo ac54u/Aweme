@@ -8,6 +8,7 @@
 #import <math.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <os/lock.h>
 
 @class YYImageDecoder;
 @class YYImageFrame;
@@ -62,6 +63,9 @@ static inline CGFloat DYYYNormalizedDelay(CGFloat delay) {
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *batchTotalCountMap;                                                 // 批量ID到总数量的映射
 @property(nonatomic, strong) NSMutableDictionary<NSString *, void (^)(NSInteger current, NSInteger total)> *batchProgressBlocks;              // 批量进度回调
 @property(nonatomic, strong) NSMutableDictionary<NSString *, void (^)(NSInteger successCount, NSInteger totalCount)> *batchCompletionBlocks;  // 批量完成回调
+@property(nonatomic, strong) NSMutableArray<NSProgress *> *activeProgressObservers;
+@property(nonatomic, assign) os_unfair_lock batchProgressLock;
+@property(nonatomic, strong) NSURLSession *downloadSession;
 @end
 
 @implementation DYYYManager
@@ -95,6 +99,8 @@ static inline CGFloat DYYYNormalizedDelay(CGFloat delay) {
         _batchTotalCountMap = [NSMutableDictionary dictionary];
         _batchProgressBlocks = [NSMutableDictionary dictionary];
         _batchCompletionBlocks = [NSMutableDictionary dictionary];
+        _activeProgressObservers = [NSMutableArray array];
+        _batchProgressLock = OS_UNFAIR_LOCK_INIT;
     }
     return self;
 }
@@ -740,8 +746,9 @@ static BOOL DYYYWriteStaticImageToGIF(UIImage *image, NSURL *gifURL) {
       configuration.HTTPMaximumConnectionsPerHost = 10;                             // 增加并发连接数
       configuration.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;  // 强制从网络重新下载
 
-      // 使用共享委托的session以节省资源
-      NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration delegate:[DYYYManager shared] delegateQueue:[NSOperationQueue mainQueue]];
+      NSOperationQueue *livePhotoDelegateQueue = [[NSOperationQueue alloc] init];
+      livePhotoDelegateQueue.name = @"com.dyyy.livephoto.delegate";
+      NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration delegate:[DYYYManager shared] delegateQueue:livePhotoDelegateQueue];
 
       dispatch_group_t group = dispatch_group_create();
       __block BOOL imageDownloaded = NO;
@@ -792,13 +799,13 @@ static BOOL DYYYWriteStaticImageToGIF(UIImage *image, NSURL *gifURL) {
                                                      dispatch_group_leave(group);
                                                    }];
 
-      // 设置图片下载进度观察
-      if ([imageTask respondsToSelector:@selector(taskIdentifier)]) {
-          [[manager taskProgressMap] setObject:@(0.0) forKey:imageDownloadID];
-
-          // 使用系统API观察进度 (iOS 11+)
-          if (@available(iOS 11.0, *)) {
+      // Monitor download progress (iOS 11+)
+      if (@available(iOS 11.0, *)) {
+          if ([imageTask respondsToSelector:@selector(progress)]) {
               [imageTask.progress addObserver:manager forKeyPath:@"fractionCompleted" options:NSKeyValueObservingOptionNew context:(__bridge void *)(imageDownloadID)];
+              @synchronized(manager.activeProgressObservers) {
+                  [manager.activeProgressObservers addObject:imageTask.progress];
+              }
           }
       }
 
@@ -817,13 +824,13 @@ static BOOL DYYYWriteStaticImageToGIF(UIImage *image, NSURL *gifURL) {
                                                      dispatch_group_leave(group);
                                                    }];
 
-      // 设置视频下载进度观察
-      if ([videoTask respondsToSelector:@selector(taskIdentifier)]) {
-          [[manager taskProgressMap] setObject:@(0.0) forKey:videoDownloadID];
-
-          // 使用系统API观察进度 (iOS 11+)
-          if (@available(iOS 11.0, *)) {
+      // Monitor video download progress (iOS 11+)
+      if (@available(iOS 11.0, *)) {
+          if ([videoTask respondsToSelector:@selector(progress)]) {
               [videoTask.progress addObserver:manager forKeyPath:@"fractionCompleted" options:NSKeyValueObservingOptionNew context:(__bridge void *)(videoDownloadID)];
+              @synchronized(manager.activeProgressObservers) {
+                  [manager.activeProgressObservers addObject:videoTask.progress];
+              }
           }
       }
 
@@ -839,13 +846,19 @@ static BOOL DYYYWriteStaticImageToGIF(UIImage *image, NSURL *gifURL) {
             progressTimer = nil;
         }
 
-        // 移除进度观察
+        // Remove progress observers
         if (@available(iOS 11.0, *)) {
             if ([imageTask respondsToSelector:@selector(progress)]) {
                 [imageTask.progress removeObserver:manager forKeyPath:@"fractionCompleted"];
+                @synchronized(manager.activeProgressObservers) {
+                    [manager.activeProgressObservers removeObject:imageTask.progress];
+                }
             }
             if ([videoTask respondsToSelector:@selector(progress)]) {
                 [videoTask.progress removeObserver:manager forKeyPath:@"fractionCompleted"];
+                @synchronized(manager.activeProgressObservers) {
+                    [manager.activeProgressObservers removeObject:videoTask.progress];
+                }
             }
         }
 
@@ -894,7 +907,11 @@ static BOOL DYYYWriteStaticImageToGIF(UIImage *image, NSURL *gifURL) {
         if (downloadID) {
             NSProgress *progress = (NSProgress *)object;
             float fractionCompleted = progress.fractionCompleted;
-            [self.taskProgressMap setObject:@(fractionCompleted) forKey:downloadID];
+            @try {
+                [self.taskProgressMap setObject:@(fractionCompleted) forKey:downloadID];
+            } @catch (NSException *exception) {
+                [progress removeObserver:self forKeyPath:@"fractionCompleted" context:context];
+            }
         }
     } else {
         [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
@@ -968,6 +985,15 @@ static BOOL DYYYWriteStaticImageToGIF(UIImage *image, NSURL *gifURL) {
                          }];
 }
 
+- (NSURLSession *)downloadSession {
+    if (!_downloadSession) {
+        NSURLSessionConfiguration *config = [NSURLSessionConfiguration defaultSessionConfiguration];
+        config.timeoutIntervalForRequest = 120.0;
+        _downloadSession = [NSURLSession sessionWithConfiguration:config delegate:self delegateQueue:[NSOperationQueue mainQueue]];
+    }
+    return _downloadSession;
+}
+
 + (void)downloadMediaWithProgress:(NSURL *)url
                         mediaType:(MediaType)mediaType
                             audio:(NSURL *)audioURL
@@ -989,9 +1015,8 @@ static BOOL DYYYWriteStaticImageToGIF(UIImage *image, NSURL *gifURL) {
       [[DYYYManager shared] setCompletionBlock:completion forDownloadID:downloadID];
       [[DYYYManager shared] setMediaType:mediaType forDownloadID:downloadID];
 
-      // 配置下载会话 - 使用带委托的会话以获取进度更新
-      NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration defaultSessionConfiguration];
-      NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration delegate:[DYYYManager shared] delegateQueue:[NSOperationQueue mainQueue]];
+      // 配置下载会话 - 使用共享委托的session以节省资源
+      NSURLSession *session = [[DYYYManager shared] downloadSession];
 
       // 创建下载任务 - 不使用completionHandler，使用代理方法
       NSURLSessionDownloadTask *downloadTask = [session downloadTaskWithURL:url];
@@ -1146,6 +1171,13 @@ static BOOL DYYYWriteStaticImageToGIF(UIImage *image, NSURL *gifURL) {
 
     [[DYYYManager shared].downloadTasks removeAllObjects];
     [[DYYYManager shared].progressViews removeAllObjects];
+
+    for (NSProgress *progress in [[DYYYManager shared].activeProgressObservers copy]) {
+        @try {
+            [progress removeObserver:[DYYYManager shared] forKeyPath:@"fractionCompleted"];
+        } @catch (NSException *e) {}
+    }
+    [[DYYYManager shared].activeProgressObservers removeAllObjects];
 }
 
 + (void)downloadAllImages:(NSMutableArray *)imageURLs {
@@ -1203,7 +1235,7 @@ static BOOL DYYYWriteStaticImageToGIF(UIImage *image, NSURL *gifURL) {
           NSString *downloadID = [NSUUID UUID].UUIDString;
           [[DYYYManager shared] associateDownload:downloadID withBatchID:batchID];
           NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration defaultSessionConfiguration];
-          NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration delegate:[DYYYManager shared] delegateQueue:[NSOperationQueue mainQueue]];
+      NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration delegate:[DYYYManager shared] delegateQueue:[[NSOperationQueue alloc] init]];
 
           // 创建下载任务 - 使用代理方法
           NSURLSessionDownloadTask *downloadTask = [session downloadTaskWithURL:url];
@@ -1240,59 +1272,57 @@ static BOOL DYYYWriteStaticImageToGIF(UIImage *image, NSURL *gifURL) {
 
 // 批量下载完成计数并更新进度
 - (void)incrementCompletedAndUpdateProgressForBatch:(NSString *)batchID success:(BOOL)success {
-    @synchronized(self) {
-        NSNumber *completedCountNum = self.batchCompletedCountMap[batchID];
-        NSInteger completedCount = completedCountNum ? [completedCountNum integerValue] + 1 : 1;
-        [self.batchCompletedCountMap setObject:@(completedCount) forKey:batchID];
+    os_unfair_lock_lock(&_batchProgressLock);
+    NSNumber *completedCountNum = self.batchCompletedCountMap[batchID];
+    NSInteger completedCount = completedCountNum ? [completedCountNum integerValue] + 1 : 1;
+    [self.batchCompletedCountMap setObject:@(completedCount) forKey:batchID];
 
-        if (success) {
-            NSNumber *successCountNum = self.batchSuccessCountMap[batchID];
-            NSInteger successCount = successCountNum ? [successCountNum integerValue] + 1 : 1;
-            [self.batchSuccessCountMap setObject:@(successCount) forKey:batchID];
+    if (success) {
+        NSNumber *successCountNum = self.batchSuccessCountMap[batchID];
+        NSInteger successCount = successCountNum ? [successCountNum integerValue] + 1 : 1;
+        [self.batchSuccessCountMap setObject:@(successCount) forKey:batchID];
+    }
+
+    NSNumber *totalCountNum = self.batchTotalCountMap[batchID];
+    NSInteger totalCount = totalCountNum ? [totalCountNum integerValue] : 0;
+
+    DYYYToast *progressView = self.progressViews[batchID];
+    if (progressView) {
+        float progress = totalCount > 0 ? (float)completedCount / totalCount : 0;
+        [progressView setProgress:progress];
+    }
+
+    void (^progressBlock)(NSInteger current, NSInteger total) = self.batchProgressBlocks[batchID];
+    if (progressBlock) {
+        progressBlock(completedCount, totalCount);
+    }
+
+    if (completedCount >= totalCount) {
+        NSInteger successCount = [self.batchSuccessCountMap[batchID] integerValue];
+
+        void (^completionBlock)(NSInteger successCount, NSInteger totalCount) = self.batchCompletionBlocks[batchID];
+        if (completionBlock) {
+            completionBlock(successCount, totalCount);
         }
 
-        NSNumber *totalCountNum = self.batchTotalCountMap[batchID];
-        NSInteger totalCount = totalCountNum ? [totalCountNum integerValue] : 0;
-
-        DYYYToast *progressView = self.progressViews[batchID];
         if (progressView) {
-            float progress = totalCount > 0 ? (float)completedCount / totalCount : 0;
-            [progressView setProgress:progress];
+            progressView.allowSuccessAnimation = (successCount == totalCount);
+            [progressView dismiss];
         }
+        [self.progressViews removeObjectForKey:batchID];
 
-        void (^progressBlock)(NSInteger current, NSInteger total) = self.batchProgressBlocks[batchID];
-        if (progressBlock) {
-            progressBlock(completedCount, totalCount);
-        }
+        [self.batchCompletedCountMap removeObjectForKey:batchID];
+        [self.batchSuccessCountMap removeObjectForKey:batchID];
+        [self.batchTotalCountMap removeObjectForKey:batchID];
+        [self.batchProgressBlocks removeObjectForKey:batchID];
+        [self.batchCompletionBlocks removeObjectForKey:batchID];
 
-        if (completedCount >= totalCount) {
-            NSInteger successCount = [self.batchSuccessCountMap[batchID] integerValue];
-
-            void (^completionBlock)(NSInteger successCount, NSInteger totalCount) = self.batchCompletionBlocks[batchID];
-            if (completionBlock) {
-                completionBlock(successCount, totalCount);
-            }
-
-            if (progressView) {
-                progressView.allowSuccessAnimation = (successCount == totalCount);
-                [progressView dismiss];
-            }
-            [self.progressViews removeObjectForKey:batchID];
-
-            // 清理批量下载相关信息
-            [self.batchCompletedCountMap removeObjectForKey:batchID];
-            [self.batchSuccessCountMap removeObjectForKey:batchID];
-            [self.batchTotalCountMap removeObjectForKey:batchID];
-            [self.batchProgressBlocks removeObjectForKey:batchID];
-            [self.batchCompletionBlocks removeObjectForKey:batchID];
-
-            // 移除关联的下载ID
-            NSArray *downloadIDs = [self.downloadToBatchMap allKeysForObject:batchID];
-            for (NSString *downloadID in downloadIDs) {
-                [self.downloadToBatchMap removeObjectForKey:downloadID];
-            }
+        NSArray *downloadIDs = [self.downloadToBatchMap allKeysForObject:batchID];
+        for (NSString *downloadID in downloadIDs) {
+            [self.downloadToBatchMap removeObjectForKey:downloadID];
         }
     }
+    os_unfair_lock_unlock(&_batchProgressLock);
 }
 
 // 保存完成回调
@@ -1420,30 +1450,68 @@ static BOOL DYYYWriteStaticImageToGIF(UIImage *image, NSURL *gifURL) {
                  didWriteData:(int64_t)bytesWritten
             totalBytesWritten:(int64_t)totalBytesWritten
     totalBytesExpectedToWrite:(int64_t)totalBytesExpectedToWrite {
-    // 确保不会除以0
     if (totalBytesExpectedToWrite <= 0) {
         return;
     }
 
-    // 计算进度
+    // Check and enforce size limits on first data chunk
+    static NSMutableSet *sizeCheckedTasks = nil;
+    static dispatch_once_t sizeCheckToken;
+    dispatch_once(&sizeCheckToken, ^{
+        sizeCheckedTasks = [NSMutableSet set];
+    });
+
+    NSString *downloadIDForTask = nil;
+    for (NSString *key in self.downloadTasks.allKeys) {
+        NSURLSessionDownloadTask *task = self.downloadTasks[key];
+        if (task == downloadTask) {
+            downloadIDForTask = key;
+            break;
+        }
+    }
+
+    if (downloadIDForTask && ![sizeCheckedTasks containsObject:downloadIDForTask]) {
+        [sizeCheckedTasks addObject:downloadIDForTask];
+        int64_t const maxSize = 500 * 1024 * 1024; // 500MB hard cap
+        if (totalBytesExpectedToWrite > maxSize) {
+            NSLog(@"[DYYY] Download cancelled: file size %lld exceeds %lld MB limit", totalBytesExpectedToWrite, maxSize / (1024 * 1024));
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [DYYYUtils showToast:@"文件过大，已取消下载"];
+            });
+            [downloadTask cancel];
+            if (downloadIDForTask) {
+                [self.downloadTasks removeObjectForKey:downloadIDForTask];
+                [self.taskProgressMap removeObjectForKey:downloadIDForTask];
+                DYYYToast *pv = self.progressViews[downloadIDForTask];
+                if (pv) { pv.isCancelled = YES; [pv dismiss]; [self.progressViews removeObjectForKey:downloadIDForTask]; }
+                void (^cb)(BOOL, NSURL *) = self.completionBlocks[downloadIDForTask];
+                if (cb) { cb(NO, nil); [self.completionBlocks removeObjectForKey:downloadIDForTask]; }
+                [sizeCheckedTasks removeObject:downloadIDForTask];
+            }
+            return;
+        }
+    }
+
+    // Calculate progress
     float progress = (float)totalBytesWritten / totalBytesExpectedToWrite;
 
     dispatch_async(dispatch_get_main_queue(), ^{
-      NSString *downloadIDForTask = nil;
-
-      for (NSString *key in self.downloadTasks.allKeys) {
-          NSURLSessionDownloadTask *task = self.downloadTasks[key];
-          if (task == downloadTask) {
-              downloadIDForTask = key;
-              break;
+      // If downloadIDForTask was already found above, reuse or re-find for safety
+      NSString *downloadID = downloadIDForTask;
+      if (!downloadID) {
+          for (NSString *key in self.downloadTasks.allKeys) {
+              NSURLSessionDownloadTask *task = self.downloadTasks[key];
+              if (task == downloadTask) {
+                  downloadID = key;
+                  break;
+              }
           }
       }
 
-      // 如果找到对应的进度视图，更新进度
-      if (downloadIDForTask) {
-          [self.taskProgressMap setObject:@(progress) forKey:downloadIDForTask];
+      if (downloadID) {
+          [self.taskProgressMap setObject:@(progress) forKey:downloadID];
 
-          DYYYToast *progressView = self.progressViews[downloadIDForTask];
+          DYYYToast *progressView = self.progressViews[downloadID];
           if (progressView) {
               if (!progressView.isCancelled) {
                   [progressView setProgress:progress];

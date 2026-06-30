@@ -63,19 +63,24 @@ static void DYYYRemoveRemoteConfigObserver(void) {
 %hook AWELeftSideBarWeatherLabel
 - (id)initWithFrame:(CGRect)frame {
     id orig = %orig;
-    self.hidden = YES;
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideSidebarWeather"]) {
+        self.hidden = YES;
+    }
     return orig;
 }
 
 - (void)drawTextInRect:(CGRect)rect {
-    // 不做任何绘制，彻底隐藏
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideSidebarWeather"]) return;
+    %orig;
 }
 %end
 
 %hook AWELeftSideBarWeatherView
 - (void)layoutSubviews {
     %orig;
-    self.hidden = YES;
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideSidebarWeather"]) {
+        self.hidden = YES;
+    }
 }
 %end
 
@@ -87,6 +92,7 @@ static void DYYYRemoveRemoteConfigObserver(void) {
 - (void)didMoveToSuperview {
     %orig;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (!self.superview) return;
         NSString *accessibilityLabel = self.accessibilityLabel;
         if (![accessibilityLabel isEqualToString:@"设置"]) {
             return;
@@ -709,7 +715,13 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
               item.detail = savedValue ?: @"";
               item.cellTappedBlock = ^{
                 NSString *savedKeywords = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYFilterProp"] ?: @"";
-                NSArray *keywordArray = [savedKeywords length] > 0 ? [savedKeywords componentsSeparatedByString:@","] : @[];
+                NSMutableArray *keywordArray = [NSMutableArray array];
+                if (savedKeywords.length > 0) {
+                    for (NSString *k in [savedKeywords componentsSeparatedByString:@","]) {
+                        NSString *trimmed = [k stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+                        if (trimmed.length > 0) [keywordArray addObject:trimmed];
+                    }
+                }
                 DYYYKeywordListView *keywordListView = [[DYYYKeywordListView alloc] initWithTitle:@"设置过滤词（支持部分匹配）" keywords:keywordArray];
                 keywordListView.onConfirm = ^(NSArray *keywords) {
                   NSString *keywordString = [keywords componentsJoinedByString:@","];
@@ -3448,7 +3460,10 @@ speedSettingsItem.detail = trimmedText;
                                                 [DYYYUtils showToast:@"抖音设置已清除，应用即将退出"];
 
                                                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                                                  exit(0);
+                                                  [[UIApplication sharedApplication] performSelector:@selector(suspend)];
+                                                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                                                    exit(0);
+                                                  });
                                                 });
                                             } else {
                                                 [DYYYUtils showToast:[NSString stringWithFormat:@"清除失败: %@", error.localizedDescription]];

@@ -252,6 +252,13 @@ static void collectSettingsVCs(UIViewController *vc, NSMutableArray *array) {
 }
 
 static NSArray *allSettingsViewControllers(void) {
+    static NSArray *cachedResult = nil;
+    static CFAbsoluteTime lastCollectionTime = 0;
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    if (cachedResult && (now - lastCollectionTime) < 0.5) {
+        return cachedResult;
+    }
+
     UIWindow *window = [DYYYUtils getActiveWindow];
     if (!window) {
         window = [UIApplication sharedApplication].windows.firstObject;
@@ -260,6 +267,8 @@ static NSArray *allSettingsViewControllers(void) {
     if (window.rootViewController) {
         collectSettingsVCs(window.rootViewController, result);
     }
+    cachedResult = result;
+    lastCollectionTime = now;
     return result;
 }
 
@@ -719,7 +728,7 @@ static void showIconOptionsDialog(NSString *title, UIImage *previewImage, NSStri
         onCancel:^{
           [DYYYUtils showToast:@"请立即卸载本插件"];
           dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            exit(0);
+            [[UIApplication sharedApplication] performSelector:@selector(suspend)];
           });
         }];
 }

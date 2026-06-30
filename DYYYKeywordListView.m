@@ -284,9 +284,10 @@
 }
 
 - (void)deleteKeyword:(UIButton *)sender {
-    NSInteger index = sender.tag;
-    if (index < self.keywords.count) {
-        [self.keywords removeObjectAtIndex:index];
+    CGPoint buttonPosition = [sender convertPoint:CGPointZero toView:self.keywordsTableView];
+    NSIndexPath *indexPath = [self.keywordsTableView indexPathForRowAtPoint:buttonPosition];
+    if (indexPath && indexPath.row < self.keywords.count) {
+        [self.keywords removeObjectAtIndex:indexPath.row];
         [self.keywordsTableView reloadData];
     }
 }

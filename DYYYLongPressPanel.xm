@@ -1573,13 +1573,22 @@ static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
     if (!URL) return;
 
     NSString *urlStr = URL.absoluteString;
-    NSString *localPath = URL.path; // 纯粹的本地路径，没有 file:// 前缀
+    NSString *localPath = URL.path;
     NSString *lowerStr = urlStr.lowercaseString;
     NSString *lowerName = URL.lastPathComponent.lowercaseString ?: @"";
     NSString *pathExt = URL.pathExtension.lowercaseString ?: @"";
 
-    // 🛑 黑名单：屏蔽自己录制的、裁剪的、变声的文件
-    // 用 lastPathComponent + 路径段精确匹配，避免误伤线上 URL 里的 "record"/"upload" 字面量
+    // Fast-path: skip known non-audio extensions immediately
+    static NSSet *nonAudioExts = nil;
+    static dispatch_once_t nonAudioToken;
+    dispatch_once(&nonAudioToken, ^{
+        nonAudioExts = [NSSet setWithArray:@[@"mp4", @"mov", @"flv", @"m3u8", @"ts",
+                                              @"jpg", @"jpeg", @"png", @"webp", @"gif", @"bmp",
+                                              @"json", @"xml", @"html", @"js", @"css",
+                                              @"zip", @"tar", @"gz", @"7z"]];
+    });
+    if (pathExt.length > 0 && [nonAudioExts containsObject:pathExt]) return;
+
     if ([lowerName hasPrefix:@"temp_trimmed"] ||
         [lowerName hasPrefix:@"dyyy_"] ||
         [lowerStr containsString:@"/record/"] ||
@@ -1614,22 +1623,9 @@ static void DYYY_CheckAndCaptureAudio(NSURL *URL, NSString *source) {
                          [lowerStr containsString:@"im_audio"] ||
                          [lowerStr containsString:@"im-audio"] ||
                          [lowerStr containsString:@"chat"] ||
+
                          [lowerStr containsString:@"voice"] ||
                          [lowerStr containsString:@"audio"]);
-
-    // 过滤掉明显的非音频文件 (视频/图片)；用 pathExtension 避免误伤
-    if ([pathExt isEqualToString:@"mp4"] ||
-        [pathExt isEqualToString:@"mov"] ||
-        [pathExt isEqualToString:@"flv"] ||
-        [pathExt isEqualToString:@"m3u8"] ||
-        [pathExt isEqualToString:@"ts"] ||
-        [pathExt isEqualToString:@"jpg"] ||
-        [pathExt isEqualToString:@"jpeg"] ||
-        [pathExt isEqualToString:@"png"] ||
-        [pathExt isEqualToString:@"webp"] ||
-        [pathExt isEqualToString:@"gif"]) {
-        return;
-    }
 
     // 🎯 记录路径并区分网络/本地
     if (isNetwork && (hasAudioExt || hasAudioKeyword)) {
@@ -1737,25 +1733,58 @@ static void DYYY_CaptureFromData(NSData *result, NSString *path, BOOL isNetworkU
 %hook NSData
 + (instancetype)dataWithContentsOfFile:(NSString *)path {
     NSData *result = %orig;
-    DYYY_CaptureFromData(result, path, NO);
+    if (result && result.length > 4) {
+        NSString *ext = path.pathExtension.lowercaseString;
+        if (ext.length == 0 || [DYYYAudioExtensionsForCapture() containsObject:ext]) {
+            DYYY_CaptureFromData(result, path, NO);
+        }
+    }
     return result;
 }
 + (instancetype)dataWithContentsOfFile:(NSString *)path options:(NSDataReadingOptions)opts error:(NSError **)err {
     NSData *result = %orig;
-    DYYY_CaptureFromData(result, path, NO);
+    if (result && result.length > 4) {
+        NSString *ext = path.pathExtension.lowercaseString;
+        if (ext.length == 0 || [DYYYAudioExtensionsForCapture() containsObject:ext]) {
+            DYYY_CaptureFromData(result, path, NO);
+        }
+    }
     return result;
 }
 + (instancetype)dataWithContentsOfURL:(NSURL *)url {
     NSData *result = %orig;
-    if (url) DYYY_CaptureFromData(result, url.absoluteString, [url.scheme hasPrefix:@"http"]);
+    if (result && result.length > 4 && url) {
+        NSString *ext = url.pathExtension.lowercaseString;
+        BOOL isAudioExt = ext.length == 0 || [DYYYAudioExtensionsForCapture() containsObject:ext];
+        BOOL isNetwork = [url.scheme hasPrefix:@"http"];
+        if (isAudioExt || isNetwork) {
+            DYYY_CaptureFromData(result, url.absoluteString, isNetwork);
+        }
+    }
     return result;
 }
 + (instancetype)dataWithContentsOfURL:(NSURL *)url options:(NSDataReadingOptions)opts error:(NSError **)err {
     NSData *result = %orig;
-    if (url) DYYY_CaptureFromData(result, url.absoluteString, [url.scheme hasPrefix:@"http"]);
+    if (result && result.length > 4 && url) {
+        NSString *ext = url.pathExtension.lowercaseString;
+        BOOL isAudioExt = ext.length == 0 || [DYYYAudioExtensionsForCapture() containsObject:ext];
+        BOOL isNetwork = [url.scheme hasPrefix:@"http"];
+        if (isAudioExt || isNetwork) {
+            DYYY_CaptureFromData(result, url.absoluteString, isNetwork);
+        }
+    }
     return result;
 }
 %end
+
+static NSSet *DYYYAudioExtensionsForCapture(void) {
+    static NSSet *exts = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        exts = [NSSet setWithArray:@[@"mp3", @"m4a", @"aac", @"amr", @"silk", @"wav", @"ogg", @"opus", @"flac"]];
+    });
+    return exts;
+}
 
 
 // ==========================================
@@ -1781,13 +1810,15 @@ static NSString *DYYY_ScanRecentAudioInCache(NSTimeInterval maxAgeSec, NSMutable
     NSInteger totalSeen = 0;
     NSInteger matchedExt = 0;
     NSInteger inWindow = 0;
+    NSInteger const kMaxScanEntries = 20000; // 保护上限，避免无限遍历巨大目录
 
     for (NSString *root in roots) {
         if (!root.length) continue;
+        if (totalSeen >= kMaxScanEntries) break;
         NSDirectoryEnumerator *e = [[NSFileManager defaultManager] enumeratorAtPath:root];
         NSString *rel;
         while ((rel = [e nextObject])) {
-            totalSeen++;
+            if (totalSeen++ >= kMaxScanEntries) break;
             NSString *ext = rel.pathExtension.lowercaseString;
             if (![audioExts containsObject:ext]) continue;
             matchedExt++;
@@ -1828,36 +1859,35 @@ static NSString *DYYY_ScanRecentAudioInCache(NSTimeInterval maxAgeSec, NSMutable
 // ==========================================
 %hook UIWindow
 - (void)motionEnded:(UIEventSubtype)motion withEvent:(UIEvent *)event {
-    if (motion == UIEventSubtypeMotionShake) {
-        // 🔬 诊断模式：抓不到时弹详情 toast
-        BOOL hadHookPath = (g_lastCapturedAudioPath != nil);
-        BOOL hadMemData  = (g_lastCapturedAudioData != nil);
-        BOOL hookIsNetwork = g_isLastCapturedNetwork;
+    if (motion != UIEventSubtypeMotionShake) {
+        %orig;
+        return;
+    }
 
-        // 兜底：所有 hook 都没抓到时，扫描整个沙盒
-        NSMutableString *stats = [NSMutableString string];
-        if (!g_lastCapturedAudioPath && !g_lastCapturedAudioData) {
-            NSString *scanned = DYYY_ScanRecentAudioInCache(300.0, stats);
-            if (scanned) {
-                g_lastCapturedAudioPath = scanned;
-                g_isLastCapturedNetwork = NO;
-            }
-        }
+    BOOL capturedPath = (g_lastCapturedAudioPath != nil);
+    BOOL capturedMem  = (g_lastCapturedAudioData != nil);
 
-        if (!g_lastCapturedAudioPath && !g_lastCapturedAudioData) {
-            NSString *diag = [NSString stringWithFormat:@"🔬 摇到了但没抓到\npath:%@ data:%@ %@\n%@",
-                hadHookPath ? @"有" : @"无",
-                hadMemData  ? @"有" : @"无",
-                hookIsNetwork ? @"net" : @"local",
-                stats];
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [DYYYUtils showToast:diag];
-            });
-            %orig;
-            return;
+    NSMutableString *stats = [NSMutableString string];
+    if (!capturedPath && !capturedMem) {
+        NSString *scanned = DYYY_ScanRecentAudioInCache(300.0, stats);
+        if (scanned) {
+            g_lastCapturedAudioPath = scanned;
+            g_isLastCapturedNetwork = NO;
+            capturedPath = YES;
         }
     }
-    if (motion == UIEventSubtypeMotionShake && g_lastCapturedAudioPath) {
+
+    if (!capturedPath && !capturedMem) {
+        NSString *diag = [NSString stringWithFormat:@"摇到了但没抓到 %@", stats];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [DYYYUtils showToast:diag];
+        });
+        %orig;
+        return;
+    }
+
+    // Audio was captured — consume the shake event
+    {
 
         NSString *targetDir = [[DYYYAudioManager sharedManager] voiceDirectory];
         NSString *ext = @"aac"; // 默认 aac
@@ -1918,8 +1948,7 @@ static NSString *DYYY_ScanRecentAudioInCache(NSTimeInterval maxAgeSec, NSMutable
             }
         }
     }
-    %orig;
-}
+}  // end consume-shake block
 %end
 
 

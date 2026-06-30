@@ -1,23 +1,7 @@
 #import <UIKit/UIKit.h>
 #import "DYYYUtils.h"
 
-// 自定义确认关闭弹窗类
-@interface DYYYConfirmCloseView : UIView
-@property(nonatomic, strong) UIVisualEffectView *blurView;
-@property(nonatomic, strong) UIView *contentView;
-@property(nonatomic, strong) UILabel *titleLabel;
-@property(nonatomic, strong) UILabel *messageLabel;
-@property(nonatomic, strong) UIButton *cancelButton;
-@property(nonatomic, strong) UIButton *confirmButton;
-@property(nonatomic, strong) UILabel *countdownLabel;
-@property(nonatomic, assign) NSInteger countdown;
-@property(nonatomic, strong) NSTimer *countdownTimer;
-
-- (instancetype)initWithTitle:(NSString *)title message:(NSString *)message;
-- (void)show;
-- (void)dismiss;
-@end
-
+// 自定义确认关闭弹窗类 — 声明参见 DYYYConfirmCloseView.h
 @implementation DYYYConfirmCloseView
 
 - (instancetype)initWithTitle:(NSString *)title message:(NSString *)message {
@@ -149,6 +133,7 @@
 }
 
 - (void)updateCountdown {
+    if (self.countdown <= 0) return;
     self.countdown--;
     self.countdownLabel.text = [NSString stringWithFormat:@"%ld 秒后自动关闭", (long)self.countdown];
 
@@ -183,9 +168,11 @@
 
 - (void)confirmTapped {
     [self dismiss];
-    // 延迟执行关闭
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-      exit(0);
+      [[UIApplication sharedApplication] performSelector:@selector(suspend)];
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        exit(0);
+      });
     });
 }
 

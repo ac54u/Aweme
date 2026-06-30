@@ -45,6 +45,7 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
 @property(nonatomic, strong) UIVisualEffectView *blurEffectView;
 @property(nonatomic, strong) UIVisualEffectView *vibrancyEffectView;
 @property(nonatomic, assign) BOOL isAgreementShown;
+@property(nonatomic, strong) CAGradientLayer *titleGradientLayer;
 
 @end
 
@@ -85,6 +86,24 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
     if (!self.isAgreementShown) {
         [self checkFirstLaunch];
         self.isAgreementShown = YES;
+    }
+
+    if (self.titleGradientLayer) {
+        self.titleGradientLayer.speed = 1.0;
+        CFTimeInterval pausedTime = self.titleGradientLayer.timeOffset;
+        self.titleGradientLayer.timeOffset = 0.0;
+        self.titleGradientLayer.beginTime = 0.0;
+        CFTimeInterval timeSincePause = [self.titleGradientLayer convertTime:CACurrentMediaTime() fromLayer:nil] - pausedTime;
+        self.titleGradientLayer.beginTime = timeSincePause;
+    }
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    if (self.titleGradientLayer) {
+        CFTimeInterval pausedTime = [self.titleGradientLayer convertTime:CACurrentMediaTime() fromLayer:nil];
+        self.titleGradientLayer.speed = 0.0;
+        self.titleGradientLayer.timeOffset = pausedTime;
     }
 }
 
@@ -416,6 +435,7 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
 
 - (void)addTitleGradientAnimation {
     CAGradientLayer *gradient = [CAGradientLayer layer];
+    self.titleGradientLayer = gradient;
     gradient.colors = @[ (__bridge id)[UIColor systemRedColor].CGColor, (__bridge id)[UIColor systemBlueColor].CGColor ];
     gradient.startPoint = CGPointMake(0, 0);
     gradient.endPoint = CGPointMake(1, 0);
@@ -499,6 +519,10 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
 }
 
 - (void)showAgreementAlert {
+    [self showAgreementAlertWithRetryCount:0 maxRetries:5];
+}
+
+- (void)showAgreementAlertWithRetryCount:(NSInteger)retryCount maxRetries:(NSInteger)maxRetries {
     UIAlertController *alertController =
         [UIAlertController alertControllerWithTitle:@"用户协议"
                                             message:@"本插件为开源项目\n仅供学习交流用途\n如有侵权请联系, GitHub 仓库：huami1314/DYYY\n请遵守当地法律法规, "
@@ -518,6 +542,10 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
                                                             if ([inputText isEqualToString:@"我已阅读并同意继续使用"]) {
                                                                 [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"DYYYUserAgreementAccepted"];
                                                             } else {
+                                                                if (retryCount >= maxRetries) {
+                                                                    [DYYYUtils showToast:@"输入错误次数过多，请退出应用"];
+                                                                    return;
+                                                                }
                                                                 UIAlertController *errorAlert = [UIAlertController alertControllerWithTitle:@"输入错误"
                                                                                                                                     message:@"请正确输入"
                                                                                                                              preferredStyle:UIAlertControllerStyleAlert];
@@ -525,7 +553,7 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
                                                                 UIAlertAction *okAction = [UIAlertAction actionWithTitle:@"确定"
                                                                                                                    style:UIAlertActionStyleDefault
                                                                                                                  handler:^(UIAlertAction *_Nonnull action) {
-                                                                                                                   [self showAgreementAlert];
+                                                                                                                   [self showAgreementAlertWithRetryCount:retryCount + 1 maxRetries:maxRetries];
                                                                                                                  }];
 
                                                                 [errorAlert addAction:okAction];
@@ -536,7 +564,7 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
     UIAlertAction *exitAction = [UIAlertAction actionWithTitle:@"退出"
                                                          style:UIAlertActionStyleDestructive
                                                        handler:^(UIAlertAction *_Nonnull action) {
-                                                         exit(0);
+                                                         [[UIApplication sharedApplication] performSelector:@selector(suspend)];
                                                        }];
 
     [alertController addAction:confirmAction];
@@ -552,26 +580,10 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
-    switch (section) {
-        case 0:
-            return @"基本设置";
-        case 1:
-            return @"界面设置";
-        case 2:
-            return @"隐藏设置";
-        case 3:
-            return @"顶栏移除";
-        case 4:
-            return @"隐藏面板";
-        case 5:
-            return @"面板设置";
-        case 6:
-            return @"功能设置";
-        case 7:
-            return @"悬浮按钮";
-        default:
-            return @"";
+    if (section >= 0 && section < (NSInteger)self.sectionTitles.count) {
+        return self.sectionTitles[section];
     }
+    return @"";
 }
 
 - (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {

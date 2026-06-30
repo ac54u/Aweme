@@ -11,6 +11,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <signal.h>
+#import <os/lock.h>
 
 void updateClearButtonVisibility(void);
 void showClearButton(void);
@@ -23,17 +24,22 @@ BOOL isAppActive = YES;
 BOOL dyyyIsPerformingFloatClearOperation = NO;
 
 static NSInteger dyyyClearButtonMutationDepth = 0;
+static os_unfair_lock dyyyClearButtonMutationLock = OS_UNFAIR_LOCK_INIT;
 
 static inline void DYYYBeginClearButtonMutation(void) {
+    os_unfair_lock_lock(&dyyyClearButtonMutationLock);
     dyyyClearButtonMutationDepth++;
     dyyyIsPerformingFloatClearOperation = YES;
+    os_unfair_lock_unlock(&dyyyClearButtonMutationLock);
 }
 
 static inline void DYYYEndClearButtonMutation(void) {
+    os_unfair_lock_lock(&dyyyClearButtonMutationLock);
     if (dyyyClearButtonMutationDepth > 0) {
         dyyyClearButtonMutationDepth--;
     }
     dyyyIsPerformingFloatClearOperation = dyyyClearButtonMutationDepth > 0;
+    os_unfair_lock_unlock(&dyyyClearButtonMutationLock);
 }
 
 static void DYYYPerformClearButtonMutation(dispatch_block_t block) {
@@ -251,7 +257,7 @@ void initTargetClassNames(void) {
         self.checkTimer = nil;
     }
     __weak __typeof(self) weakSelf = self;
-    NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:0.2
+    NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:1.0
                                                     repeats:YES
                                                       block:^(NSTimer *timer) {
                                                         __strong __typeof(weakSelf) strongSelf = weakSelf;
@@ -260,6 +266,9 @@ void initTargetClassNames(void) {
                                                         }
                                                         if (strongSelf.isElementsHidden) {
                                                             [strongSelf hideUIElements];
+                                                        } else {
+                                                            [strongSelf.checkTimer invalidate];
+                                                            strongSelf.checkTimer = nil;
                                                         }
                                                       }];
     self.checkTimer = timer;

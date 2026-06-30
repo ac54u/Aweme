@@ -4,6 +4,16 @@
 
 @implementation DYYYBottomAlertView
 
+static NSCache *DYYYBottomAlertImageCache(void) {
+    static NSCache *cache = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        cache = [[NSCache alloc] init];
+        cache.countLimit = 50;
+    });
+    return cache;
+}
+
 + (UIViewController *)showAlertWithTitle:(NSString *)title
                                  message:(NSString *)message
                                avatarURL:(nullable NSString *)avatarURL
@@ -41,10 +51,28 @@
 
         // 异步加载网络图片
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-          NSData *imageData = [NSData dataWithContentsOfURL:[NSURL URLWithString:avatarURL]];
+          NSCache *cache = DYYYBottomAlertImageCache();
+          UIImage *cachedImage = [cache objectForKey:avatarURL];
+          if (cachedImage) {
+              dispatch_async(dispatch_get_main_queue(), ^{
+                imageView.image = cachedImage;
+              });
+              return;
+          }
+          NSURL *imageURL = [NSURL URLWithString:avatarURL];
+          NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:imageURL cachePolicy:NSURLRequestReturnCacheDataElseLoad timeoutInterval:10.0];
+          dispatch_semaphore_t sema = dispatch_semaphore_create(0);
+          __block NSData *imageData = nil;
+          NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            imageData = data;
+            dispatch_semaphore_signal(sema);
+          }];
+          [task resume];
+          dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15 * NSEC_PER_SEC)));
           if (imageData) {
               UIImage *image = [UIImage imageWithData:imageData];
               if (image) {
+                  [cache setObject:image forKey:avatarURL];
                   dispatch_async(dispatch_get_main_queue(), ^{
                     imageView.image = image;
                   });

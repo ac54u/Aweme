@@ -12,6 +12,7 @@ static NSString *s_fileMode = nil;
 static NSString *const kDefaultRemoteConfigURL = DYYY_DEFAULT_ABTEST_URL;
 
 static dispatch_once_t s_loadOnceToken;
+static BOOL s_needsConfigReload = NO;
 static dispatch_queue_t s_abTestHookQueue;
 static dispatch_once_t s_queueOnceToken;
 static void *s_queueSpecificKey = &s_queueSpecificKey;
@@ -115,9 +116,54 @@ static void DYYYQueueSync(dispatch_block_t block) {
 + (void)cleanLocalABTestData {
     dispatch_async(DYYYABTestQueue(), ^{
       s_localABTestData = nil;
-      s_loadOnceToken = 0;
+      s_needsConfigReload = YES;
       NSLog(@"[DYYY] 本地ABTest配置已清除");
     });
+}
+
++ (void)loadLocalABTestConfigOnce {
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString *documentsDirectory = [paths firstObject];
+    NSString *dyyyFolderPath = [documentsDirectory stringByAppendingPathComponent:@"DYYY"];
+    NSString *jsonFilePath = [dyyyFolderPath stringByAppendingPathComponent:@"abtest_data_fixed.json"];
+
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    if (![fileManager fileExistsAtPath:dyyyFolderPath]) {
+        NSError *error = nil;
+        [fileManager createDirectoryAtPath:dyyyFolderPath withIntermediateDirectories:YES attributes:nil error:&error];
+        if (error) {
+            NSLog(@"[DYYY] 创建DYYY目录失败: %@", error.localizedDescription);
+        }
+    }
+
+    NSError *error = nil;
+    NSData *jsonData = [NSData dataWithContentsOfFile:jsonFilePath options:0 error:&error];
+
+    if (jsonData) {
+        NSDictionary *loadedData = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+        if (loadedData && !error) {
+            id modeValue = loadedData[@"mode"];
+            s_fileMode = nil;
+            if ([modeValue isKindOfClass:[NSString class]]) {
+                s_fileMode = [modeValue lowercaseString];
+            }
+            NSDictionary *actualData = loadedData[@"data"];
+            if (!actualData) {
+                NSMutableDictionary *tmp = [loadedData mutableCopy];
+                [tmp removeObjectForKey:@"mode"];
+                actualData = [tmp copy];
+            }
+            s_localABTestData = [actualData copy];
+            NSLog(@"[DYYY] ABTest本地配置已从文件加载成功");
+            return;
+        } else {
+            NSLog(@"[DYYY] ABTest本地配置解析失败: %@", error.localizedDescription);
+        }
+    } else {
+        NSLog(@"[DYYY] ABTest本地配置文件不存在或无法读取");
+    }
+
+    s_localABTestData = nil;
 }
 
 /**
@@ -128,54 +174,14 @@ static void DYYYQueueSync(dispatch_block_t block) {
  */
 + (void)loadLocalABTestConfig {
     dispatch_async(DYYYABTestQueue(), ^{
-      dispatch_once(&s_loadOnceToken, ^{
-        // 获取存储路径
-        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-        NSString *documentsDirectory = [paths firstObject];
-        NSString *dyyyFolderPath = [documentsDirectory stringByAppendingPathComponent:@"DYYY"];
-        NSString *jsonFilePath = [dyyyFolderPath stringByAppendingPathComponent:@"abtest_data_fixed.json"];
-
-        // 确保目录存在
-        NSFileManager *fileManager = [NSFileManager defaultManager];
-        if (![fileManager fileExistsAtPath:dyyyFolderPath]) {
-            NSError *error = nil;
-            [fileManager createDirectoryAtPath:dyyyFolderPath withIntermediateDirectories:YES attributes:nil error:&error];
-            if (error) {
-                NSLog(@"[DYYY] 创建DYYY目录失败: %@", error.localizedDescription);
-            }
-        }
-
-        // 读取本地配置文件
-        NSError *error = nil;
-        NSData *jsonData = [NSData dataWithContentsOfFile:jsonFilePath options:0 error:&error];
-
-        if (jsonData) {
-            NSDictionary *loadedData = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
-            if (loadedData && !error) {
-                id modeValue = loadedData[@"mode"];
-                s_fileMode = nil;
-                if ([modeValue isKindOfClass:[NSString class]]) {
-                    s_fileMode = [modeValue lowercaseString];
-                }
-                NSDictionary *actualData = loadedData[@"data"];
-                if (!actualData) {
-                    NSMutableDictionary *tmp = [loadedData mutableCopy];
-                    [tmp removeObjectForKey:@"mode"];
-                    actualData = [tmp copy];
-                }
-                s_localABTestData = [actualData copy];
-                NSLog(@"[DYYY] ABTest本地配置已从文件加载成功");
-                return;
-            } else {
-                NSLog(@"[DYYY] ABTest本地配置解析失败: %@", error.localizedDescription);
-            }
-        } else {
-            NSLog(@"[DYYY] ABTest本地配置文件不存在或无法读取");
-        }
-
-        // 加载失败时的处理
-        s_localABTestData = nil;
-      });
+      if (!s_needsConfigReload) {
+          dispatch_once(&s_loadOnceToken, ^{
+            [self loadLocalABTestConfigOnce];
+          });
+      } else {
+          s_needsConfigReload = NO;
+          [self loadLocalABTestConfigOnce];
+      }
     });
 }
 

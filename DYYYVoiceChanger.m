@@ -45,7 +45,7 @@ static BOOL _isAudioAssistantActive = NO;
             exportSuccess = success;
             dispatch_semaphore_signal(sema);
         }];
-        dispatch_semaphore_wait(sema, DISPATCH_TIME_FOREVER);
+        dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(60 * NSEC_PER_SEC)));
         return exportSuccess;
     }
     
@@ -61,7 +61,7 @@ static BOOL _isAudioAssistantActive = NO;
         dispatch_semaphore_signal(semaphore);
     }];
     
-    dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+    dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(60 * NSEC_PER_SEC)));
     return processSuccess;
 }
 
@@ -140,11 +140,13 @@ static BOOL _isAudioAssistantActive = NO;
     
     dispatch_semaphore_t sema = dispatch_semaphore_create(0);
     __block BOOL success = NO;
-    
+
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
         BOOL isFirstBuffer = YES;
-        while (reader.status == AVAssetReaderStatusReading) {
-            if (writerInput.isReadyForMoreMediaData) {
+        dispatch_queue_t writerQueue = dispatch_queue_create("com.dyyy.voice.writer", DISPATCH_QUEUE_SERIAL);
+
+        [writerInput requestMediaDataWhenReadyOnQueue:writerQueue usingBlock:^{
+            while (writerInput.isReadyForMoreMediaData && reader.status == AVAssetReaderStatusReading) {
                 CMSampleBufferRef buffer = [readerOutput copyNextSampleBuffer];
                 if (buffer) {
                     if (isFirstBuffer) {
@@ -154,17 +156,20 @@ static BOOL _isAudioAssistantActive = NO;
                     }
                     if (![writerInput appendSampleBuffer:buffer]) {
                         CFRelease(buffer);
-                        break;
+                        [writerInput markAsFinished];
+                        return;
                     }
                     CFRelease(buffer);
                 } else {
                     [writerInput markAsFinished];
-                    break;
+                    return;
                 }
-            } else {
-                [NSThread sleepForTimeInterval:0.005];
             }
-        }
+            if (reader.status != AVAssetReaderStatusReading) {
+                [writerInput markAsFinished];
+            }
+        }];
+
         if (reader.status == AVAssetReaderStatusCompleted && !isFirstBuffer) {
             [writer finishWritingWithCompletionHandler:^{
                 success = (writer.status == AVAssetWriterStatusCompleted);
@@ -176,7 +181,7 @@ static BOOL _isAudioAssistantActive = NO;
         }
     });
     
-    dispatch_semaphore_wait(sema, DISPATCH_TIME_FOREVER);
+    dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(60 * NSEC_PER_SEC)));
     return success;
 }
 

@@ -74,3 +74,7 @@ static void showAntiRevokeToast(NSString *msg) {
 }
 
 %end
+
+%ctor {
+    %init;
+}

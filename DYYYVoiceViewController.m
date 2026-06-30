@@ -374,6 +374,12 @@ static NSString *g_pendingReplacePath = nil;
 }
 
 - (void)pauseDouyinVideoInViewController:(UIViewController *)vc {
+    static Class playVCClass = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        playVCClass = NSClassFromString(@"AWEPlayInteractionViewController");
+    });
+    if (playVCClass && ![vc isKindOfClass:playVCClass]) return;
     SEL pauseSel = NSSelectorFromString(@"pause");
     if ([vc respondsToSelector:pauseSel]) {
         IMP imp = [vc methodForSelector:pauseSel];
@@ -665,7 +671,7 @@ UIContextualAction *shareAction = [UIContextualAction contextualActionWithStyle:
             [exportSession exportAsynchronouslyWithCompletionHandler:^{
                 dispatch_semaphore_signal(sema);
             }];
-            dispatch_semaphore_wait(sema, DISPATCH_TIME_FOREVER);
+            dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(60 * NSEC_PER_SEC)));
             
             NSString *finalExportPath = path;
             if (exportSession.status == AVAssetExportSessionStatusCompleted) {

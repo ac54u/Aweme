@@ -481,7 +481,11 @@
 
     NSString *username = [[NSUserDefaults standardUserDefaults] stringForKey:@"DYYYGeonamesUsername"];
     if (!username || [username length] == 0) {
-        username = @"your_username";
+        if (completionHandler) {
+            NSError *paramError = [NSError errorWithDomain:DYYYGeonamesErrorDomain code:-4 userInfo:@{NSLocalizedDescriptionKey : @"请先设置 Geonames 用户名"}];
+            completionHandler(nil, paramError);
+        }
+        return;
     }
 
     NSCharacterSet *allowedSet = [NSCharacterSet URLQueryAllowedCharacterSet];

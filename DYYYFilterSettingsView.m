@@ -341,6 +341,7 @@ static const int kDYYYButtonsPerRow = 10;
 
 - (void)characterTouchUp:(UIButton *)sender {
     self.isDragging = NO;
+    self.isSelecting = NO;
 }
 
 // 添加方法重置选择状态
@@ -470,7 +471,13 @@ static const int kDYYYButtonsPerRow = 10;
     if (self.propName.length == 0)
         return;
     NSString *saved = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYFilterProp"] ?: @"";
-    NSMutableArray *array = saved.length > 0 ? [saved componentsSeparatedByString:@","].mutableCopy : [NSMutableArray array];
+    NSMutableArray *array = [NSMutableArray array];
+    if (saved.length > 0) {
+        for (NSString *item in [saved componentsSeparatedByString:@","]) {
+            NSString *trimmed = [item stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if (trimmed.length > 0) [array addObject:trimmed];
+        }
+    }
     BOOL exists = [array containsObject:self.propName];
 
     if (exists) {

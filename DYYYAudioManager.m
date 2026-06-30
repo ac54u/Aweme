@@ -26,9 +26,13 @@
         _voiceDirectory = [docDir stringByAppendingPathComponent:@"DYYY_Voices"];
         
         NSFileManager *fm = [NSFileManager defaultManager];
-        if (![fm fileExistsAtPath:_voiceDirectory]) {
-            [fm createDirectoryAtPath:_voiceDirectory withIntermediateDirectories:YES attributes:nil error:nil];
+    if (![fm fileExistsAtPath:_voiceDirectory]) {
+        NSError *createError = nil;
+        [fm createDirectoryAtPath:_voiceDirectory withIntermediateDirectories:YES attributes:nil error:&createError];
+        if (createError) {
+            NSLog(@"[DYYY] 创建语音目录失败: %@", createError);
         }
+    }
     }
     return self;
 }
@@ -57,11 +61,32 @@
     if (!urlString || urlString.length == 0) return;
     
     NSURL *url = [NSURL URLWithString:urlString];
-    [[[NSURLSession sharedSession] downloadTaskWithURL:url completionHandler:^(NSURL *location, NSURLResponse *response, NSError *error) {
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    request.timeoutInterval = 30.0;
+    [[[NSURLSession sharedSession] downloadTaskWithRequest:request completionHandler:^(NSURL *location, NSURLResponse *response, NSError *error) {
         if (error) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 [DYYYUtils showToast:@"下载音频失败"];
             });
+            return;
+        }
+
+        NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
+        long long contentLength = [httpResponse.allHeaderFields[@"Content-Length"] longLongValue];
+        if (contentLength > 50 * 1024 * 1024) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [DYYYUtils showToast:@"文件过大，无法保存"];
+            });
+            [[NSFileManager defaultManager] removeItemAtURL:location error:nil];
+            return;
+        }
+
+        NSString *contentType = httpResponse.allHeaderFields[@"Content-Type"];
+        if (contentType && ![contentType hasPrefix:@"audio/"] && ![contentType hasPrefix:@"application/octet-stream"]) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [DYYYUtils showToast:@"非音频文件，无法保存"];
+            });
+            [[NSFileManager defaultManager] removeItemAtURL:location error:nil];
             return;
         }
 

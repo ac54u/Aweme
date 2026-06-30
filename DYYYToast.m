@@ -202,12 +202,23 @@
 
     return nil;
 }
-// 下载成功动画方法
+
+- (void)removeAnimationLayersFromProgressView {
+    NSArray *sublayers = [self.progressView.layer.sublayers copy];
+    for (CALayer *layer in sublayers) {
+        if (layer != self.progressLayer) {
+            [layer removeFromSuperlayer];
+        }
+    }
+}
+
 - (void)showSuccessAnimation:(void (^)(void))completion {
     BOOL isDarkMode = [DYYYUtils isDarkMode];
 
     UIColor *successColor =
         isDarkMode ? [UIColor colorWithRed:48 / 255.0 green:209 / 255.0 blue:151 / 255.0 alpha:1.0] : [UIColor colorWithRed:11 / 255.0 green:195 / 255.0 blue:139 / 255.0 alpha:1.0];
+
+    [self removeAnimationLayersFromProgressView];
 
     [UIView animateWithDuration:0.3
         animations:^{
@@ -321,6 +332,8 @@
     BOOL isDarkMode = [DYYYUtils isDarkMode];
 
     UIColor *cancelColor = isDarkMode ? [UIColor colorWithRed:52 / 255.0 green:152 / 255.0 blue:219 / 255.0 alpha:1.0] : [UIColor colorWithRed:41 / 255.0 green:128 / 255.0 blue:185 / 255.0 alpha:1.0];
+
+    [self removeAnimationLayersFromProgressView];
 
     // 创建圆形背景
     CAShapeLayer *circleLayer = [CAShapeLayer layer];
@@ -464,6 +477,8 @@
 
     UIColor *successColor =
         isDarkMode ? [UIColor colorWithRed:48 / 255.0 green:209 / 255.0 blue:151 / 255.0 alpha:1.0] : [UIColor colorWithRed:11 / 255.0 green:195 / 255.0 blue:139 / 255.0 alpha:1.0];
+
+    [self removeAnimationLayersFromProgressView];
 
     CAShapeLayer *circleLayer = [CAShapeLayer layer];
     CGFloat circleSize = 30;
