@@ -1730,6 +1730,15 @@ static void DYYY_CaptureFromData(NSData *result, NSString *path, BOOL isNetworkU
     g_isLastCapturedNetwork = isNetworkURL;
 }
 
+static NSSet *DYYYAudioExtensionsForCapture(void) {
+    static NSSet *exts = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        exts = [NSSet setWithArray:@[@"mp3", @"m4a", @"aac", @"amr", @"silk", @"wav", @"ogg", @"opus", @"flac"]];
+    });
+    return exts;
+}
+
 %hook NSData
 + (instancetype)dataWithContentsOfFile:(NSString *)path {
     NSData *result = %orig;
@@ -1776,15 +1785,6 @@ static void DYYY_CaptureFromData(NSData *result, NSString *path, BOOL isNetworkU
     return result;
 }
 %end
-
-static NSSet *DYYYAudioExtensionsForCapture(void) {
-    static NSSet *exts = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        exts = [NSSet setWithArray:@[@"mp3", @"m4a", @"aac", @"amr", @"silk", @"wav", @"ogg", @"opus", @"flac"]];
-    });
-    return exts;
-}
 
 
 // ==========================================
