@@ -141,36 +141,26 @@ static BOOL _isAudioAssistantActive = NO;
     dispatch_semaphore_t sema = dispatch_semaphore_create(0);
     __block BOOL success = NO;
 
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-        __block BOOL isFirstBuffer = YES;
-        dispatch_queue_t writerQueue = dispatch_queue_create("com.dyyy.voice.writer", DISPATCH_QUEUE_SERIAL);
+    [writer startSessionAtSourceTime:kCMTimeZero];
 
-        [writerInput requestMediaDataWhenReadyOnQueue:writerQueue usingBlock:^{
-            while (writerInput.isReadyForMoreMediaData && reader.status == AVAssetReaderStatusReading) {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+        while (reader.status == AVAssetReaderStatusReading) {
+            if (writerInput.isReadyForMoreMediaData) {
                 CMSampleBufferRef buffer = [readerOutput copyNextSampleBuffer];
                 if (buffer) {
-                    if (isFirstBuffer) {
-                        CMTime pts = CMSampleBufferGetPresentationTimeStamp(buffer);
-                        [writer startSessionAtSourceTime:pts];
-                        isFirstBuffer = NO;
-                    }
                     if (![writerInput appendSampleBuffer:buffer]) {
                         CFRelease(buffer);
-                        [writerInput markAsFinished];
-                        return;
+                        break;
                     }
                     CFRelease(buffer);
-                } else {
-                    [writerInput markAsFinished];
-                    return;
                 }
             }
-            if (reader.status != AVAssetReaderStatusReading) {
-                [writerInput markAsFinished];
-            }
-        }];
+            [NSThread sleepForTimeInterval:0.005];
+        }
 
-        if (reader.status == AVAssetReaderStatusCompleted && !isFirstBuffer) {
+        [writerInput markAsFinished];
+
+        if (reader.status == AVAssetReaderStatusCompleted) {
             [writer finishWritingWithCompletionHandler:^{
                 success = (writer.status == AVAssetWriterStatusCompleted);
                 dispatch_semaphore_signal(sema);
