@@ -989,7 +989,10 @@ static BOOL DYYYWriteStaticImageToGIF(UIImage *image, NSURL *gifURL) {
     if (!_downloadSession) {
         NSURLSessionConfiguration *config = [NSURLSessionConfiguration defaultSessionConfiguration];
         config.timeoutIntervalForRequest = 120.0;
-        _downloadSession = [NSURLSession sessionWithConfiguration:config delegate:self delegateQueue:[NSOperationQueue mainQueue]];
+        NSOperationQueue *delegateQueue = [[NSOperationQueue alloc] init];
+        delegateQueue.maxConcurrentOperationCount = 1;
+        delegateQueue.qualityOfService = NSQualityOfServiceUtility;
+        _downloadSession = [NSURLSession sessionWithConfiguration:config delegate:self delegateQueue:delegateQueue];
     }
     return _downloadSession;
 }

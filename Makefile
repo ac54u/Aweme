@@ -70,12 +70,10 @@ export LOGOS_DEFAULT_GENERATOR=internal
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 
-ifeq ($(shell whoami),huami)
-    export THEOS_DEVICE_IP = 192.168.31.228
-else
-    export THEOS_DEVICE_IP = 192.168.15.105
-endif
-THEOS_DEVICE_PORT = 22
+# 设备 IP 请通过 Makefile.local 配置（该文件已加入 .gitignore）
+# 示例 Makefile.local:
+#   export THEOS_DEVICE_IP = 192.168.x.x
+#   THEOS_DEVICE_PORT = 22
 
 clean::
 	@echo -e "\033[31m==>\033[0m Cleaning packages…"

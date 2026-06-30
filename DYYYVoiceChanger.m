@@ -45,7 +45,7 @@ static BOOL _isAudioAssistantActive = NO;
             exportSuccess = success;
             dispatch_semaphore_signal(sema);
         }];
-        dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(60 * NSEC_PER_SEC)));
+        dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)));
         return exportSuccess;
     }
     
@@ -61,7 +61,7 @@ static BOOL _isAudioAssistantActive = NO;
         dispatch_semaphore_signal(semaphore);
     }];
     
-    dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(60 * NSEC_PER_SEC)));
+    dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)));
     return processSuccess;
 }
 
@@ -171,12 +171,7 @@ static BOOL _isAudioAssistantActive = NO;
         }
     });
     
-    dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(60 * NSEC_PER_SEC)));
-    return success;
-}
-
-// ==========================================
-// 🛡️ 第二层：智能嗅探提纯机 (同样焊死 48000Hz)
+    dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)));
 // ==========================================
 + (BOOL)engineTranscodeAudioFrom:(NSString *)inputPath to:(NSString *)outputPath {
     NSURL *sourceURL = [NSURL fileURLWithPath:inputPath];

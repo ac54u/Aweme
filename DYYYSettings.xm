@@ -87,6 +87,15 @@ static void DYYYRemoveRemoteConfigObserver(void) {
 @interface AWELeftSideBarTopIconHorizontalView : UIView
 @end
 
+static UIView *DYYYFindButtonContainerView(UIView *view) {
+    UIView *candidate = view;
+    NSInteger maxDepth = 5;
+    for (NSInteger i = 0; i < maxDepth && candidate.superview; i++) {
+        candidate = candidate.superview;
+    }
+    return candidate ?: view;
+}
+
 %hook AWELeftSideBarTopIconHorizontalView
 
 - (void)didMoveToSuperview {
@@ -97,7 +106,7 @@ static void DYYYRemoveRemoteConfigObserver(void) {
         if (![accessibilityLabel isEqualToString:@"设置"]) {
             return;
         }
-        UIView *targetSuperView = self.superview.superview.superview ?: self;
+        UIView *targetSuperView = DYYYFindButtonContainerView(self);
         UIButton *oldBtn = (UIButton *)[targetSuperView viewWithTag:232323];
         if (oldBtn) {
             [oldBtn removeFromSuperview];
@@ -148,7 +157,7 @@ static void DYYYRemoveRemoteConfigObserver(void) {
         if (![accessibilityLabel isEqualToString:@"设置"]) {
             return;
         }
-        UIView *targetSuperView = self.superview.superview.superview ?: self;
+        UIView *targetSuperView = DYYYFindButtonContainerView(self);
         UIButton *oldBtn = (UIButton *)[targetSuperView viewWithTag:232323];
         if (oldBtn) {
             [oldBtn removeFromSuperview];

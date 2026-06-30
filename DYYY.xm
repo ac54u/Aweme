@@ -1671,6 +1671,19 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 
 static void DYYY_LogToFile(NSString *content) {
     NSString *logPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"DYYY_Debug.log"];
+    NSFileManager *fm = [NSFileManager defaultManager];
+
+    unsigned long long maxSize = 5 * 1024 * 1024;
+    if ([fm fileExistsAtPath:logPath]) {
+        NSDictionary *attrs = [fm attributesOfItemAtPath:logPath error:nil];
+        unsigned long long fileSize = [attrs fileSize];
+        if (fileSize > maxSize) {
+            NSString *oldPath = [logPath stringByAppendingString:@".old"];
+            [fm removeItemAtPath:oldPath error:nil];
+            [fm moveItemAtPath:logPath toPath:oldPath error:nil];
+        }
+    }
+
     NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
     [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
     NSString *timestamp = [formatter stringFromDate:[NSDate date]];
