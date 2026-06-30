@@ -1,4 +1,5 @@
 #import <UIKit/UIKit.h>
+#import "DYYYConfirmCloseView.h"
 #import "DYYYUtils.h"
 
 // 自定义确认关闭弹窗类 — 声明参见 DYYYConfirmCloseView.h

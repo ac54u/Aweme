@@ -4,6 +4,12 @@
 
 @implementation DYYYBottomAlertView
 
+- (void)dismiss {
+    if (self.superview) {
+        [self removeFromSuperview];
+    }
+}
+
 static NSCache *DYYYBottomAlertImageCache(void) {
     static NSCache *cache = nil;
     static dispatch_once_t onceToken;
