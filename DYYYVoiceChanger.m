@@ -142,7 +142,7 @@ static BOOL _isAudioAssistantActive = NO;
     __block BOOL success = NO;
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-        BOOL isFirstBuffer = YES;
+        __block BOOL isFirstBuffer = YES;
         dispatch_queue_t writerQueue = dispatch_queue_create("com.dyyy.voice.writer", DISPATCH_QUEUE_SERIAL);
 
         [writerInput requestMediaDataWhenReadyOnQueue:writerQueue usingBlock:^{
