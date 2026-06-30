@@ -10,6 +10,7 @@
 #import <float.h>
 #import <math.h>
 #import <objc/runtime.h>
+#import <os/lock.h>
 
 #import "AwemeHeaders.h"
 #import "DYYYBottomAlertView.h"
