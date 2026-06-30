@@ -5,6 +5,25 @@
 //  Channel: @huamidev
 //  Created on: 2024/10/04
 //
+//  ==========================================
+//  功能分区概览:
+//    I.   水印 & 个人简介 (line ~223)
+//    II.  视频相关 (画质、倍速、进度条) (line ~275)
+//    III. 频道管理 & UI 隐藏 (line ~386)
+//    IV.  手势控制 (亮度/音量/侧边栏) (line ~470)
+//    V.   弹幕 & 评论 (line ~738)
+//    VI.  设置入口 & 全局透明度 (line ~814)
+//    VII. 下载 & 资源管理 (line ~1541)
+//    VIII.直播模式 (隐身、PCDN、画质) (line ~1563)
+//    IX.  隐私 & 埋点拦截 (line ~1620)
+//    X.   私信变声器 (line ~1696)
+//    XI.  通知 & 弹窗样式 (line ~1754)
+//    XII. 图标 & UI 细节 (line ~2724)
+//    XIII.TabBar 定制 (line ~4894)
+//    XIV.播放器交互 (line ~6618)
+//    XV. iPad 横屏适配 (line ~7038)
+//  ==========================================
+//
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
 #import <float.h>
