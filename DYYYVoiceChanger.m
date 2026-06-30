@@ -172,6 +172,11 @@ static BOOL _isAudioAssistantActive = NO;
     });
     
     dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)));
+    return success;
+}
+
+// ==========================================
+// 🛡️ 第二层：智能嗅探提纯机 (同样焊死 48000Hz)
 // ==========================================
 + (BOOL)engineTranscodeAudioFrom:(NSString *)inputPath to:(NSString *)outputPath {
     NSURL *sourceURL = [NSURL fileURLWithPath:inputPath];
