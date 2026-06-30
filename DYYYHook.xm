@@ -20,32 +20,38 @@ static void showAntiRevokeToast(NSString *msg) {
     });
 }
 
+static inline BOOL DYYYIsAntiRecallEnabled(void) {
+    return [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYAntiRecall"];
+}
+
+static inline BOOL DYYYIsNoReadReceiptEnabled(void) {
+    return [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYNoReadReceipt"];
+}
+
 // ==========================================
 // 🛡️ 防线 1：拦截 TIMMessage 底层 SDK 状态变更
 // ==========================================
-// 字节系 App 底层通常使用 TIMMessage 作为消息基类
 %hook TIMMessage
 
-// 拦截“设置为已撤回”的方法
 - (void)setIsRevoked:(BOOL)revoked {
+    if (!DYYYIsAntiRecallEnabled()) {
+        %orig;
+        return;
+    }
     if (revoked) {
-        // 1. 发现撤回指令！强行篡改为 NO (未撤回)
         %orig(NO);
-        
-        // 2. 弹窗通知你，有人在“掩耳盗铃”
         dispatch_async(dispatch_get_main_queue(), ^{
             showAntiRevokeToast(@"🛡️ 拦截到一条撤回指令！\n原消息已为您保留。");
         });
-        
-        // 3. 拦截完毕，直接 return，不让后续的删除逻辑执行
         return;
     }
-    // 正常状态放行
     %orig;
 }
 
-// 拦截获取状态的方法，永远告诉 UI 这条消息没被撤回
 - (BOOL)isRevoked {
+    if (!DYYYIsAntiRecallEnabled()) {
+        return %orig;
+    }
     return NO;
 }
 
@@ -53,12 +59,15 @@ static void showAntiRevokeToast(NSString *msg) {
 
 
 // ==========================================
-// 🛡️ 防线 2：拦截 AWEIMMessage 业务层状态变更 (双重保险)
+// 🛡️ 防线 2：拦截 AWEIMMessage 业务层状态变更
 // ==========================================
-// 抖音上层业务逻辑可能会包装一层 AWEIMMessage
 %hook AWEIMMessage
 
 - (void)setRevoked:(BOOL)revoked {
+    if (!DYYYIsAntiRecallEnabled()) {
+        %orig;
+        return;
+    }
     if (revoked) {
         %orig(NO);
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -70,11 +79,108 @@ static void showAntiRevokeToast(NSString *msg) {
 }
 
 - (BOOL)revoked {
+    if (!DYYYIsAntiRecallEnabled()) {
+        return %orig;
+    }
     return NO;
 }
 
 %end
 
+// ==========================================
+// 🛡️ 防线 3：拦截撤回通知
+// ==========================================
+static void installRevokeNotificationGuard(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSArray *suspectedNames = @[
+            @"messageRevoked",
+            @"MessageRevoked",
+            @"kTIMMessageRevoked",
+            @"TMessageRevoked",
+            @"TIMMessageRevoked",
+        ];
+        for (NSString *name in suspectedNames) {
+            [[NSNotificationCenter defaultCenter] addObserverForName:name object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
+                if (DYYYIsAntiRecallEnabled()) {
+                    showAntiRevokeToast(@"🛡️ 拦截到撤回通知！\n消息已保住！");
+                }
+            }];
+        }
+    });
+}
+
+// ==========================================
+// 👻 私信已读不回
+// ==========================================
+static void installNoReadReceiptHooks(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        if (!DYYYIsNoReadReceiptEnabled()) return;
+
+        // Hook TIMMessage 级别可能的已读标记方法
+        Class timMsgClass = NSClassFromString(@"TIMMessage");
+        if (timMsgClass) {
+            NSArray *readSels = @[@"setIsRead:", @"setReadStatus:", @"setMsgRead:", @"markAsRead", @"setHasRead:"];
+            for (NSString *selName in readSels) {
+                SEL sel = NSSelectorFromString(selName);
+                Method m = class_getInstanceMethod(timMsgClass, sel);
+                if (m) {
+                    IMP origIMP = method_getImplementation(m);
+                    IMP newIMP = imp_implementationWithBlock(^(id self) {
+                        if (DYYYIsNoReadReceiptEnabled()) return;
+                        ((void (*)(id, SEL))origIMP)(self, sel);
+                    });
+                    method_setImplementation(m, newIMP);
+                }
+            }
+        }
+
+        // Hook AWEIMMessage 级别的已读方法
+        Class aweMsgClass = NSClassFromString(@"AWEIMMessage");
+        if (aweMsgClass) {
+            NSArray *readSels = @[@"setIsRead:", @"setRead:", @"markRead", @"setMsgRead:"];
+            for (NSString *selName in readSels) {
+                SEL sel = NSSelectorFromString(selName);
+                Method m = class_getInstanceMethod(aweMsgClass, sel);
+                if (m) {
+                    IMP origIMP = method_getImplementation(m);
+                    IMP newIMP = imp_implementationWithBlock(^(id self) {
+                        if (DYYYIsNoReadReceiptEnabled()) return;
+                        ((void (*)(id, SEL))origIMP)(self, sel);
+                    });
+                    method_setImplementation(m, newIMP);
+                }
+            }
+        }
+
+        // Hook 会话级别的已读上报
+        Class convClass = NSClassFromString(@"AWEIMConversation");
+        if (!convClass) convClass = NSClassFromString(@"TIMConversation");
+        if (convClass) {
+            NSArray *convSels = @[@"markAllMessagesAsRead", @"reportReaded", @"setAllMessagesRead", @"readMessages:"];
+            for (NSString *selName in convSels) {
+                SEL sel = NSSelectorFromString(selName);
+                Method m = class_getInstanceMethod(convClass, sel);
+                if (m) {
+                    IMP origIMP = method_getImplementation(m);
+                    IMP newIMP = imp_implementationWithBlock(^(id self) {
+                        if (DYYYIsNoReadReceiptEnabled()) return;
+                        ((void (*)(id, SEL))origIMP)(self, sel);
+                    });
+                    method_setImplementation(m, newIMP);
+                }
+            }
+        }
+    });
+}
+
 %ctor {
     %init;
+
+    // 在下一个 runloop 周期安装动态 Hook（此时所有类已加载）
+    dispatch_async(dispatch_get_main_queue(), ^{
+        installRevokeNotificationGuard();
+        installNoReadReceiptHooks();
+    });
 }
