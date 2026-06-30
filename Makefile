@@ -27,6 +27,7 @@ export DEBUG = 0
 INSTALL_TARGET_PROCESSES = Aweme
 
 GO_EASY_ON_ME = 1
+# TODO: 改为 1 需先消除现有编译警告（~100+ 个 AwemeHeaders.h 类型不匹配等）
 export ERROR_ON_WARNINGS = 0
 export TARGET_HAS_APPSnippets = 0
 
