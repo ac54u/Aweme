@@ -28,6 +28,7 @@ static CGFloat gStartY = 0.0;
 static CGFloat gStartVal = 0.0;
 static DYEdgeMode gMode = DYEdgeModeNone;
 static __weak UICollectionView *gFeedCV = nil;
+static os_unfair_lock gGestureLock = OS_UNFAIR_LOCK_INIT;
 
 static const CGFloat kInvalidAlpha = -1.0;
 static const CGFloat kInvalidHeight = -1.0;
@@ -476,6 +477,8 @@ static BOOL DYYYShouldHandleSpeedFeatures(void) {
         return;
     }
 
+    os_unfair_lock_lock(&gGestureLock);
+
     /* 取触点坐标、手势状态 */
     CGPoint loc = [pan locationInView:self];
     CGFloat w = self.bounds.size.width;
@@ -500,8 +503,10 @@ static BOOL DYYYShouldHandleSpeedFeatures(void) {
         }
     }
 
+    BOOL shouldBlockScroll = (gMode != DYEdgeModeNone);
+
     /* 调节阶段：左右边缘时吞掉滚动、修改亮度/音量 */
-    if (gMode != DYEdgeModeNone) {
+    if (shouldBlockScroll) {
 
         if (st == UIGestureRecognizerStateChanged) {
 
@@ -511,17 +516,21 @@ static BOOL DYYYShouldHandleSpeedFeatures(void) {
             newVal = fminf(fmaxf(newVal, 0.0), 1.0); // Clamp 0~1
 
             if (gMode == DYEdgeModeBrightness) {
+                os_unfair_lock_unlock(&gGestureLock);
                 [UIScreen mainScreen].brightness = newVal;
                 // 弹系统亮度 HUD
                 [[%c(SBHUDController) sharedInstance] presentHUDWithIcon:@"Brightness" level:newVal];
 
             } else { // DYEdgeModeVolume
+                os_unfair_lock_unlock(&gGestureLock);
                 // iOS 18 音量控制 + 系统音量 HUD
                 [[objc_getClass("AVSystemController") sharedAVSystemController] setVolumeTo:newVal forCategory:@"Audio/Video"];
             }
 
             // 吞掉滚动：归零 translation，防止内容位移
             [pan setTranslation:CGPointZero inView:self];
+
+            return; // unlock happened above
         }
 
         /* 结束／取消：状态复位 */
@@ -529,8 +538,11 @@ static BOOL DYYYShouldHandleSpeedFeatures(void) {
             gMode = DYEdgeModeNone;
         }
 
+        os_unfair_lock_unlock(&gGestureLock);
         return; // 左右边缘：彻底阻断 %orig，避免翻页
     }
+
+    os_unfair_lock_unlock(&gGestureLock);
 
     /* 中间区域：直接执行原先翻页逻辑 */
     %orig;
@@ -1671,22 +1683,26 @@ static void DYYY_LogToFile(NSString *content) {
 
 - (BOOL)moveItemAtPath:(NSString *)srcPath toPath:(NSString *)dstPath error:(NSError **)error {
     // 🎯 精准匹配抖音私信的音频缓存目录
-    if ([dstPath containsString:@"AWEIMRoot/attachment"] && [dstPath hasSuffix:@".m4a"]) {
-        DYYY_LogToFile([NSString stringWithFormat:@"🎯 [捕获] 拦截到待发送音频，原始路径: %@", srcPath]);
-        
-        // 1. 定义变音后文件的暂存路径
-        NSString *processedPath = [srcPath stringByReplacingOccurrencesOfString:@".m4a" withString:@"_changed.m4a"];
-        
-        // 2. 调用你的变声器进行处理 (假设你的变声器有一个这样的处理方法)
-        // 注意：这里需要是同步方法，确保处理完再往下走
-        BOOL processSuccess = [DYYYVoiceChanger processAudioFileFrom:srcPath to:processedPath];
-        
-        if (processSuccess) {
-            DYYY_LogToFile(@"✅ [篡改成功] 音频处理完成，将变音文件交给抖音...");
-            // 3. 偷梁换柱：告诉抖音去移动我们处理好的文件，而不是原文件
-            return %orig(processedPath, dstPath, error);
-        } else {
-            DYYY_LogToFile(@"❌ [篡改失败] 变音处理失败，为了不阻断发送，使用原声...");
+    if ([dstPath hasSuffix:@".m4a"]) {
+        NSArray *pathComponents = dstPath.pathComponents;
+        if (pathComponents.count >= 3) {
+            NSInteger attachmentIndex = [pathComponents indexOfObject:@"attachment"];
+            if (attachmentIndex != NSNotFound && attachmentIndex > 0) {
+                NSString *parentDir = pathComponents[attachmentIndex - 1];
+                if ([parentDir hasSuffix:@"AWEIMRoot"]) {
+                    DYYY_LogToFile([NSString stringWithFormat:@"🎯 [捕获] 拦截到待发送音频，原始路径: %@", srcPath]);
+                    
+                    NSString *processedPath = [srcPath stringByReplacingOccurrencesOfString:@".m4a" withString:@"_changed.m4a"];
+                    BOOL processSuccess = [DYYYVoiceChanger processAudioFileFrom:srcPath to:processedPath];
+                    
+                    if (processSuccess) {
+                        DYYY_LogToFile(@"✅ [篡改成功] 音频处理完成，将变音文件交给抖音...");
+                        return %orig(processedPath, dstPath, error);
+                    } else {
+                        DYYY_LogToFile(@"❌ [篡改失败] 变音处理失败，为了不阻断发送，使用原声...");
+                    }
+                }
+            }
         }
     }
     

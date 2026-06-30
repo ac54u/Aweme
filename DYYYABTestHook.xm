@@ -11,8 +11,8 @@ static NSString *s_fileMode = nil;
 // 默认远程配置地址常量
 static NSString *const kDefaultRemoteConfigURL = DYYY_DEFAULT_ABTEST_URL;
 
-static dispatch_once_t s_loadOnceToken;
 static BOOL s_needsConfigReload = NO;
+static BOOL s_hasEverLoaded = NO;
 static dispatch_queue_t s_abTestHookQueue;
 static dispatch_once_t s_queueOnceToken;
 static void *s_queueSpecificKey = &s_queueSpecificKey;
@@ -174,14 +174,13 @@ static void DYYYQueueSync(dispatch_block_t block) {
  */
 + (void)loadLocalABTestConfig {
     dispatch_async(DYYYABTestQueue(), ^{
-      if (!s_needsConfigReload) {
-          dispatch_once(&s_loadOnceToken, ^{
-            [self loadLocalABTestConfigOnce];
-          });
-      } else {
-          s_needsConfigReload = NO;
-          [self loadLocalABTestConfigOnce];
+      if (!s_needsConfigReload && s_hasEverLoaded) {
+          NSLog(@"[DYYY] ABTest配置已加载，跳过重复加载");
+          return;
       }
+      s_needsConfigReload = NO;
+      s_hasEverLoaded = YES;
+      [self loadLocalABTestConfigOnce];
     });
 }
 
@@ -241,8 +240,58 @@ static void DYYYQueueSync(dispatch_block_t block) {
 }
 
 /**
- * 从网络检查并下载最新配置
+ * 校验远程配置 JSON 结构是否合法
+ * @return nil 表示校验通过，否则返回错误描述
  */
+static NSString *DYYYValidateRemoteConfigJSON(NSDictionary *jsonDict) {
+    if (![jsonDict isKindOfClass:[NSDictionary class]]) {
+        return @"配置根节点必须为字典类型";
+    }
+
+    NSArray<NSString *> *allowedTopLevelKeys = @[@"mode", @"data", @"version", @"description"];
+    for (NSString *key in jsonDict) {
+        if (![allowedTopLevelKeys containsObject:key]) {
+            return [NSString stringWithFormat:@"未知的顶级配置键: %@", key];
+        }
+    }
+
+    id modeValue = jsonDict[@"mode"];
+    if (modeValue != nil) {
+        if (![modeValue isKindOfClass:[NSString class]]) {
+            return @"mode 字段必须为字符串类型";
+        }
+        NSString *modeStr = [(NSString *)modeValue lowercaseString];
+        if (![modeStr isEqualToString:@"patch"] && ![modeStr isEqualToString:@"replace"] && ![modeStr isEqualToString:@"dyyy_mode_replace"]) {
+            return [NSString stringWithFormat:@"未知的 mode 值: %@", modeValue];
+        }
+    }
+
+    NSDictionary *dataDict = jsonDict[@"data"];
+    if (dataDict != nil) {
+        if (![dataDict isKindOfClass:[NSDictionary class]]) {
+            return @"data 字段必须为字典类型";
+        }
+        for (id value in dataDict.allValues) {
+            if (![value isKindOfClass:[NSString class]] && ![value isKindOfClass:[NSNumber class]] && ![value isKindOfClass:[NSArray class]] && ![value isKindOfClass:[NSDictionary class]]) {
+                return [NSString stringWithFormat:@"data 中包含不支持的值类型: %@", NSStringFromClass([value class])];
+                                                                       }
+                                                                   }
+                                                                }
+
+    id versionValue = jsonDict[@"version"];
+    if (versionValue != nil && ![versionValue isKindOfClass:[NSString class]]) {
+        return @"version 字段必须为字符串类型";
+    }
+
+    id descValue = jsonDict[@"description"];
+    if (descValue != nil && ![descValue isKindOfClass:[NSString class]]) {
+        return @"description 字段必须为字符串类型";
+    }
+
+    return nil;
+}
+
+
 + (void)checkForRemoteConfigUpdate:(BOOL)notify {
     dispatch_async(DYYYABTestQueue(), ^{
       NSString *urlString = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYRemoteConfigURL"];
@@ -270,11 +319,15 @@ static void DYYYQueueSync(dispatch_block_t block) {
                                                                  NSError *validationError = nil;
                                                                  if (data && !error) {
                                                                      id jsonObject = [NSJSONSerialization JSONObjectWithData:data options:0 error:&validationError];
-                                                                     if (validationError || ![jsonObject isKindOfClass:[NSDictionary class]]) {
-                                                                         if (!validationError) {
-                                                                             validationError = [NSError errorWithDomain:@"com.dyyy.remoteconfig" code:-1 userInfo:@{NSLocalizedDescriptionKey : @"配置格式错误"}];
-                                                                         }
-                                                                     } else {
+                                                                  if (validationError || ![jsonObject isKindOfClass:[NSDictionary class]]) {
+                                                                      if (!validationError) {
+                                                                          validationError = [NSError errorWithDomain:@"com.dyyy.remoteconfig" code:-1 userInfo:@{NSLocalizedDescriptionKey : @"配置格式错误"}];
+                                                                      }
+                                                                  } else {
+                                                                      NSString *schemaError = DYYYValidateRemoteConfigJSON((NSDictionary *)jsonObject);
+                                                                      if (schemaError) {
+                                                                          validationError = [NSError errorWithDomain:@"com.dyyy.remoteconfig" code:-2 userInfo:@{NSLocalizedDescriptionKey : schemaError}];
+                                                                      } else {
                                                                          NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
                                                                          NSString *documentsDirectory = [paths firstObject];
                                                                          NSString *dyyyFolderPath = [documentsDirectory stringByAppendingPathComponent:@"DYYY"];
@@ -289,9 +342,9 @@ static void DYYYQueueSync(dispatch_block_t block) {
                                                                              [[NSUserDefaults standardUserDefaults] setBool:YES forKey:DYYY_REMOTE_CONFIG_FLAG_KEY];
                                                                              [[NSNotificationCenter defaultCenter] postNotificationName:DYYY_REMOTE_CONFIG_CHANGED_NOTIFICATION object:nil];
                                                                          }
-                                                                     }
-                                                                 }
-                                                                 dispatch_async(dispatch_get_main_queue(), ^{
+                                                                       }
+                                                                   }
+                                                                   dispatch_async(dispatch_get_main_queue(), ^{
                                                                    if (error || !data) {
                                                                        if (notify) {
                                                                            [DYYYUtils showToast:@"配置更新失败"];
