@@ -344,7 +344,8 @@ static NSString *DYYYValidateRemoteConfigJSON(NSDictionary *jsonDict) {
                                                                          }
                                                                        }
                                                                    }
-                                                                   dispatch_async(dispatch_get_main_queue(), ^{
+                                                               }
+                                                               dispatch_async(dispatch_get_main_queue(), ^{
                                                                    if (error || !data) {
                                                                        if (notify) {
                                                                            [DYYYUtils showToast:@"配置更新失败"];
